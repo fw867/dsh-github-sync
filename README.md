@@ -178,6 +178,40 @@ A directory that does not exist is refused with its path, before any git command
 runs: handing git a missing directory produces only a bare `spawn git ENOENT`
 that names neither the directory nor the problem.
 
+### Pointing the control at a subdirectory
+
+`findRepositoryRoot` walks **upward**, so a repository that lives *below* the
+workspace root is invisible to an unqualified check. The check therefore reports
+what it can see:
+
+- `subdirectories` — immediate subdirectories that are repositories themselves
+- `subdirectory` — which one this answer is about, absent for the workspace root
+
+The control renders those as a target list. Choosing one re-reads that
+repository, and from then on **every action in that session carries
+`--dir <name>`** — the badge, Pull, Commit, Push and the URL actions all agree on
+one repository. The choice is kept per session, so browsing a second workspace
+never silently redirects a later commit, and *The workspace itself* (offered once
+a choice has been made) goes back.
+
+The same selection can be made without the control:
+
+```
+/github status --json --dir my-plugin
+/github commit --dir my-plugin
+/github pull -C my-plugin
+```
+
+`--dir` applies to every action, not only `init` and `setup`. An explicit `--dir`
+overrides the configured `subdirectory`, which overrides the workspace root:
+
+```yaml
+- id: github-sync
+  name: 'dsh-github-sync'
+  config:
+    subdirectory: my-plugin   # the repository this workspace is about
+```
+
 **With a repository but no remote** — what `/github init` produces — publishing
 cannot succeed, so the menu drops both push entries and offers what still works:
 *Refresh status* and *Commit locally*, plus a **Connect & push** field. That last
@@ -277,6 +311,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     pullRebase: true          # pull --rebase --autostash
     fetchOnStatus: false      # fetch before reporting ahead/behind counts
     statusOnMount: true       # check when a session appears, or only when opened
+    subdirectory: ''          # repository below the workspace root, when there is one
     timeoutMs: 600000
 ```
 

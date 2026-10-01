@@ -50,6 +50,10 @@ window.__ModuleLoader__.load({
       'state.dirty': 'uncommitted changes',
       'state.ahead': '{count} to push',
       'state.behind': '{count} to pull',
+      'target.subdirectory': 'repository in {name}',
+      'menu.target.label': 'Which repository:',
+      'menu.target.entry': 'Repository in {name}',
+      'menu.target.workspace': 'The workspace itself',
       'note.noWorkspace': 'This session has no workspace directory.',
       'error.unavailable': 'GitHub sync is unavailable: the command namespace is not reachable.',
       'error.commandMissing': 'This session does not offer the /github command yet. Start a new session to pick up the plugin.',
@@ -92,6 +96,10 @@ window.__ModuleLoader__.load({
       'state.dirty': '有未提交改动',
       'state.ahead': '{count} 个待推送',
       'state.behind': '{count} 个待拉取',
+      'target.subdirectory': '仓库位于 {name}',
+      'menu.target.label': '操作哪个仓库：',
+      'menu.target.entry': '{name} 中的仓库',
+      'menu.target.workspace': '工作区本身',
       'note.noWorkspace': '当前会话没有工作区目录。',
       'error.unavailable': 'GitHub 同步不可用：无法访问命令接口。',
       'error.commandMissing': '当前会话还没有 /github 命令。请新建一个会话以载入插件。',
@@ -168,6 +176,16 @@ window.__ModuleLoader__.load({
     let eagerAllowed = true
 
     /**
+     * Which workspace subdirectory each session's actions point at.
+     *
+     * Absent means "whatever the Host is configured to look at", which is the
+     * common case. A present entry is a choice made from the control's target
+     * list, kept for the rest of the session so the badge and every action agree
+     * on one repository.
+     */
+    const targetChoice = new Map()
+
+    /**
      * How long a probe may take before the menu gives up and offers a retry.
      * Bounded on purpose: a Remote call that never settles would otherwise
      * leave the menu showing "checking" forever with no way out.
@@ -242,7 +260,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r13'
+    const BUILD = 'r14'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -399,6 +417,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * How the probed repository's location reads in the tooltip.
+     *
+     * A repository found in a subdirectory is worth naming, because "this
+     * workspace is a repository" and "this workspace contains one" lead to
+     * different expectations about which files an action will touch.
+     *
+     * @returns the description, or null when the repository is the workspace.
+     */
+    function targetLabel(probe, t) {
+      const sub = typeof probe?.subdirectory === 'string' && probe.subdirectory.length > 0 ? probe.subdirectory : null
+      return sub === null ? null : t('target.subdirectory', { name: sub })
+    }
+
+    /**
      * Describe the probed workspace state for the button label and tooltip.
      *
      * @param probe - the cached probe result, or null before the first probe.
@@ -408,7 +440,10 @@ window.__ModuleLoader__.load({
       // Until the workspace has been probed the button claims nothing, so it
       // never shows a branch that the current workspace may not have.
       if (probe === null || probe === undefined) return { label: 'GitHub', tone: null, title: t('title') }
-      if (probe.state !== 'repo') return { label: 'GitHub', tone: null, title: t('button.tooltip.none') }
+      if (probe.state !== 'repo') {
+        const where = targetLabel(probe, t)
+        return { label: 'GitHub', tone: null, title: where === null ? t('button.tooltip.none') : where }
+      }
       const known = typeof probe.branch === 'string' && probe.branch.length > 0
       const branch = known ? probe.branch : null
       const ahead = typeof probe.ahead === 'number' && probe.ahead > 0 ? probe.ahead : 0
@@ -418,6 +453,8 @@ window.__ModuleLoader__.load({
       marks.push(dirty ? t('state.dirty') : t('state.clean'))
       if (ahead > 0) marks.push(t('state.ahead', { count: ahead }))
       if (behind > 0) marks.push(t('state.behind', { count: behind }))
+      const where = targetLabel(probe, t)
+      if (where !== null) marks.push(where)
 
       // Out of sync with the remote is the thing worth seeing without opening
       // the menu, so the counts ride the label itself. Both ends are shown at
@@ -605,7 +642,10 @@ window.__ModuleLoader__.load({
           }
         }
 
-        const outcome = await run('/github status --json', { quiet: true, probe: true, signal }, address)
+        const choice = targetChoice.get(address)
+        const probeLine =
+          choice === undefined ? '/github status --json' : `/github status --json --dir "${choice}"`
+        const outcome = await run(probeLine, { quiet: true, probe: true, signal }, address)
         if (outcome.text === undefined) {
           probeCache.delete(address)
           if (announceFailure === true) {
@@ -728,10 +768,74 @@ window.__ModuleLoader__.load({
       const remoteMissing = isRepo && probe?.remote === null
       const info = describe(probe, t)
 
+      // Where this session's actions point. The Host reports which workspace
+      // subdirectories are repositories and which one it is currently looking
+      // at; choosing another applies to the rest of the session. It is kept per
+      // session rather than written to the plugin config, so browsing another
+      // workspace never silently changes where a later action commits.
+      const targetOf = (session) => targetChoice.get(session) ?? null
+      const activeTarget = targetOf(sessionId)
+      const candidates = Array.isArray(probe?.subdirectories) ? probe.subdirectories : []
+      const currentTarget =
+        activeTarget ?? (typeof probe?.subdirectory === 'string' && probe.subdirectory.length > 0 ? probe.subdirectory : null)
+      const dirSuffix = (session) => {
+        const choice = targetOf(session)
+        return choice === null ? '' : ` --dir "${choice}"`
+      }
+
+      /** Point this session at a directory and re-read the workspace. */
+      const chooseTarget = (name) => {
+        if (sessionId === undefined) return
+        if (name === null) targetChoice.delete(sessionId)
+        else targetChoice.set(sessionId, name)
+        setOpen(false)
+        void refresh(sessionId, true)
+      }
+
+      // Offered whenever the workspace holds a repository below its root, plus
+      // an entry to go back to the workspace itself.
+      const targetMenu = candidates.length === 0
+        ? null
+        : [
+            React.createElement('div', { key: 'target-label', style: S.hint }, t('menu.target.label')),
+            ...candidates.map((name) =>
+              React.createElement(
+                'button',
+                {
+                  key: `target-${name}`,
+                  type: 'button',
+                  role: 'menuitemradio',
+                  'aria-checked': currentTarget === name,
+                  disabled,
+                  style: style(S.item, disabled ? S.itemDisabled : undefined),
+                  onClick: () => chooseTarget(name),
+                },
+                `${currentTarget === name ? '● ' : '○ '}${t('menu.target.entry', { name })}`,
+              ),
+            ),
+            ...(currentTarget === null
+              ? []
+              : [
+                  React.createElement(
+                    'button',
+                    {
+                      key: 'target-root',
+                      type: 'button',
+                      role: 'menuitemradio',
+                      'aria-checked': false,
+                      disabled,
+                      style: style(S.item, disabled ? S.itemDisabled : undefined),
+                      onClick: () => chooseTarget(null),
+                    },
+                    `○ ${t('menu.target.workspace')}`,
+                  ),
+                ]),
+          ]
+
       /** Run one URL-bearing action and clear the field afterwards. */
       const submitUrl = (command) => {
         if (url.trim().length === 0) return
-        void run(`${command} ${url.trim()}`).then(() => {
+        void run(`${command} ${url.trim()}${dirSuffix(sessionId)}`).then(() => {
           setUrl('')
           void refresh()
         })
@@ -774,7 +878,7 @@ window.__ModuleLoader__.load({
             disabled,
             style: style(S.item, disabled ? S.itemDisabled : undefined),
             onClick: () => {
-              void run(`/github ${action.id}`).then(() => refresh())
+              void run(`/github ${action.id}${dirSuffix(sessionId)}`).then(() => refresh())
             },
           },
           t(action.key),
@@ -906,6 +1010,8 @@ window.__ModuleLoader__.load({
               probeError === null && (probe === null || isRepo) ? repoMenu : null,
               probeError === null && remoteMissing ? connectMenu : null,
               probe !== null && !isRepo ? emptyMenu : null,
+              // Offered last, because it changes what everything above acts on.
+              probeError === null ? targetMenu : null,
               output === null
                 ? null
                 : React.createElement('pre', { style: style(S.output, failed ? S.outputError : undefined) }, output),
