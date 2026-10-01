@@ -1,0 +1,4 @@
+- insert:
+    - id: github-sync
+      name: 'dsh-github-sync'
+      config: {}

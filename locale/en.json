@@ -1,0 +1,4 @@
+{
+  "name": "GitHub Sync",
+  "description": "Clone, pull, and auto-push GitHub repositories from the composer, with generated commit titles."
+}

@@ -1,0 +1,34 @@
+{
+  "name": "dsh-github-sync",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Clone, pull, and auto-push GitHub repositories for a DSH workspace, with automatically generated commit titles and a composer button.",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/**/*.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

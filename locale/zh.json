@@ -1,0 +1,4 @@
+{
+  "name": "GitHub 同步",
+  "description": "在输入框中克隆、拉取、自动推送 GitHub 仓库，并自动生成提交标题。"
+}
