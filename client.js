@@ -355,7 +355,8 @@ window.__ModuleLoader__.load({
         bottom: 'calc(100% + 8px)',
         left: 0,
         zIndex: 30,
-        width: 320,
+        width: 'min(560px, calc(100vw - 24px))',
+        minWidth: 320,
         boxSizing: 'border-box',
         padding: 6,
         display: 'flex',
@@ -394,20 +395,23 @@ window.__ModuleLoader__.load({
       itemDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
       changeRow: {
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 6,
         padding: '1px 8px',
       },
       changePath: {
+        // A path is shown in full. Truncating it to one ellipsised line hid
+        // exactly the part that distinguishes two similar files, and the widened
+        // menu means most paths fit on one line anyway. Long ones wrap; `break-all`
+        // is deliberate, because a path has no spaces to break at.
         flex: '1 1 auto',
         minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
         color: 'var(--dsw-alias-label-primary)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: 11,
         lineHeight: '16px',
+        whiteSpace: 'normal',
+        wordBreak: 'break-all',
       },
       changeAction: {
         flex: '0 0 auto',
@@ -463,7 +467,12 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       output: {
-        maxHeight: 168,
+        // Logs and diffs are wide and long. A 168px window cut both off, so the
+        // panel grows with the answer, keeps a tall ceiling, and wraps instead of
+        // relying on horizontal scrolling — a wrapped line is readable where a
+        // clipped one is simply missing.
+        maxHeight: 'min(52vh, 460px)',
+        minHeight: 60,
         boxSizing: 'border-box',
         margin: '4px 0 0',
         padding: '6px 8px',
@@ -473,7 +482,9 @@ window.__ModuleLoader__.load({
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: 11,
         lineHeight: '16px',
-        whiteSpace: 'pre',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        overflowWrap: 'anywhere',
       },
       outputError: { color: 'var(--dsw-alias-state-error-primary)' },
     }
@@ -1036,7 +1047,7 @@ window.__ModuleLoader__.load({
                       style: style(S.changeAction, disabled ? S.itemDisabled : undefined),
                       title: t('changes.diffLabel', { path: entry.path }),
                       onClick: () => {
-                        void run(`/github diff --file "${entry.path}"${dirSuffix(sessionId)}`)
+                        void run(`/github diff --file "${entry.path}"${dirSuffix(sessionId)}`).then(() => refresh())
                       },
                     },
                     t('changes.diff'),
