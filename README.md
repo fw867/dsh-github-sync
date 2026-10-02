@@ -609,3 +609,34 @@ does not belong in this repository's documented install.
 The Host pins the plugin module in its ESM cache, so a Host-half change always
 needs the restart; the Client half is served as a revisioned bundle and is picked
 up when its artifact changes.
+
+### Telling the two halves apart
+
+They update by different means, so they can disagree — and a stale Host looks
+exactly like a bug in the code that was just written. The control therefore shows
+**both**: the menu head reads `r18 · rev10`, its own build marker (replaced by a
+page reload) and the Host revision that answered the workspace check (replaced
+only by a reload of the Host module). `github_sync`'s `status`/probe payload
+carries the same `revision` field for anything else that wants to know.
+
+### Watching the checkout (development)
+
+DSH's HMR reloads plugin source only when an `hmr` entry names the directory to
+watch; the base bundle enables it with `root: []`, which keeps configuration
+watchers but no source watchers. Watching a linked checkout means naming the
+checkout itself, because watched paths follow `realpathSync()` and
+`**/node_modules` is ignored by default — naming the junction would watch
+nothing:
+
+```yaml
+# ~/.dsh/profiles/<profile>/cordis.patch.yml
+- id: hmr
+  disabled: false
+  config:
+    root: ["D:/path/to/dsh-github-sync"]
+```
+
+The watcher is registered at startup, so this edit itself needs one restart. The
+directory's `.git` matches the default `**/.*` ignore, which keeps commits from
+triggering reloads. Replacing the installed package — a Plugin Manager update —
+still needs a restart, and the browser side keeps its own reload mechanism.

@@ -283,7 +283,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r17'
+    const BUILD = 'r18'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1197,7 +1197,15 @@ window.__ModuleLoader__.load({
                 React.createElement(
                   'span',
                   null,
-                  actionBusy === null ? BUILD : t('menu.running', { action: actionBusy.replace('/github ', '') }),
+                  actionBusy === null
+                    ? // Both halves, because they update by different means: a page
+                      // reload replaces the control (rN) while the Host keeps the
+                      // module it loaded at startup (revN). Seeing them apart is
+                      // what makes a stale Host obvious instead of mysterious.
+                      typeof probe?.revision === 'string' && probe.revision.length > 0
+                      ? `${BUILD} · ${probe.revision}`
+                      : BUILD
+                    : t('menu.running', { action: actionBusy.replace('/github ', '') }),
                 ),
               ),
               busy === null

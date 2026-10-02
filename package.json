@@ -1,6 +1,6 @@
 {
   "name": "dsh-github-sync",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "private": true,
   "type": "module",
   "description": "Clone, pull, and auto-push GitHub repositories for a DSH workspace, with automatically generated commit titles and a composer button.",
