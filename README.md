@@ -140,17 +140,22 @@ rather than as an error.
 
 **Without a repository** — no `.git` in the workspace or any parent directory —
 pull and push would have nothing to act on, so the menu says *No repository in
-this workspace*. What it offers then depends on whether the folder is empty:
+this workspace*. It then offers:
 
-- **Empty folder** — **Clone from GitHub** (enter `owner/repo`, a URL, or a local
-  path) and **Create an empty repository here**
-- **Folder with files** — cloning is **withheld** and the reason is stated;
-  only **Create an empty repository here** remains. Cloning into a folder that
-  already holds files mixes two unrelated trees and a conflicting name would be
-  overwritten, so the entry is omitted rather than shown and then refused.
+- **Clone from GitHub** — enter `owner/repo`, a URL, or a local path
+- **Create an empty repository here** — `/github init`, creating `.git` and
+  staging the current files so the first `/github commit` is one step away
 
-**Create an empty repository here** runs `/github init`, creating `.git` and
-staging the current files so the first `/github commit` is one step away.
+A workspace that already holds files is **no obstacle to cloning**. The clone
+gets a directory of its own — by default a new subdirectory named after the
+repository — so the existing files are never written into and never conflict
+with it; where the folder is known to be non-empty, the menu states that the
+clone lands beside them. The rule that survives is about the *target*: a target
+that exists and holds files is refused, with its path, and `dir` is the way to
+clone somewhere else.
+
+`github_clone` enforces that target rule on its own, so the guard does not depend
+on the menu.
 
 ### Which directory becomes the repository
 
@@ -169,10 +174,15 @@ So a workspace whose project lives in a subfolder needs its repository created i
 /github init --dir my-plugin
 /github init https://github.com/me/repo.git --dir my-plugin
 /github setup https://github.com/me/repo.git -C my-plugin
+/github clone owner/repo --dir my-plugin
 ```
 
 The tool form is `github_sync` with `dir`. Without it the repository is created at
 the workspace root, which is correct when the workspace *is* the project.
+
+For `clone`, `dir` is the directory the repository is downloaded **into**. Without
+it the clone gets a new subdirectory named after the repository, so a workspace
+that already holds files needs no special handling — the clone lands beside them.
 
 A directory that does not exist is refused with its path, before any git command
 runs: handing git a missing directory produces only a bare `spawn git ENOENT`
@@ -229,9 +239,11 @@ starts and a plugin reload does not replace it. Riding `init` — an action ever
 session already knows — keeps the connect-and-push flow working across a plugin
 update, where a brand-new action name would answer `unknown action`.
 
-`github_clone` enforces the same rule on its own, so the guard does not depend on
-the menu: a target that exists and is non-empty is refused, naming the conflict
-and pointing at `dir` as the way to clone beside existing files.
+`github_clone` never targets the workspace root unless asked to: the default
+target is a subdirectory named after the repository, which is why a folder full
+of files beside it is fine. The rule it does enforce is about the target itself —
+one that exists and is non-empty is refused, naming the conflict and pointing at
+`dir` as the way to clone somewhere else.
 
 Every action runs the matching `/github` action through the Remote command
 namespace. The Host logs the command lifecycle, so the outcome is durable in the
@@ -305,6 +317,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     remote: origin
     branch: ''                # branch to check out after a fresh clone
     generateCommitMessage: true
+    commitLanguage: auto      # auto follows the local language; zh/en force one
     commitProvider: ''        # provider route for message generation
     commitModel: ''           # model id for message generation
     commitDiffBytes: 12000    # diff context sent to the model
@@ -326,17 +339,40 @@ silently changing behaviour mid-push.
 ## Commit titles
 
 `commit` and `sync` stage every change, then produce a
-[Conventional Commits](https://www.conventionalcommits.org/) subject:
+[Conventional Commits](https://www.conventionalcommits.org/) subject that says
+what changed, in the language the workspace runs in:
 
 1. The model named by `commitProvider`/`commitModel`, else the deployment's
    default model, is asked for one subject line using the staged diff, the
-   diffstat, and the recent subjects.
+   diffstat, and the recent subjects. It is told to name the module, behaviour,
+   command, or file that actually changed — never how many files changed — and
+   to write the summary in the resolved language.
 2. If generation is disabled, unavailable, or returns nothing, a deterministic
-   heuristic synthesizes the subject from the change set, so a push is never
-   blocked by the generator.
+   synthesis builds the subject from the change set, so a push is never blocked
+   by the generator. It reads `git diff --cached --name-status` and the staged
+   patch, and names the change in this order:
+   - the declarations the patch adds or removes (`feat(commit): add
+     resolveSubjectLanguage`),
+   - the documentation section an added heading opens (`docs: update the
+     "Commit titles" section`),
+   - otherwise the files it touches (`chore(config): update lib/config.js and
+     package.json`), naming at most three and summarizing the rest.
+
+   "`chore: update 6 files`" is deliberately not reachable: the file count is
+   the one fact a diffstat already gives and the one fact that says nothing
+   about the change.
+
+The subject language is `commitLanguage` when it names one, and otherwise the
+local language: `LC_ALL`/`LC_MESSAGES`/`LANG`, then the runtime's resolved
+locale — on Windows, the user's regional setting, so a `zh-CN` machine gets
+Chinese subjects without any configuration. `zh` and `en` force one. The
+**type token stays English** in both, so `feat`/`fix`/`docs` still parse in a
+changelog; only the summary is localized.
 
 Pass `--message "<subject>"` (command) or `message` (tool) to use a subject
-verbatim instead.
+verbatim instead. When the deterministic path is used, the commit step reports
+why — a missing model route, an aborted stream, or a model that returned no
+text — so a changed message style is never unexplained.
 
 ## Tool reference
 
@@ -345,10 +381,9 @@ verbatim instead.
 | Argument | Meaning |
 |---|---|
 | `repo` (required) | `owner/repo`, `https://…`, `git@…:owner/repo`, `host/owner/repo`, or an absolute local path. |
-| `dir` | Target directory, relative to the workspace or absolute. Defaults to the repository name. |
+| `dir` | Target directory, relative to the workspace or absolute. Defaults to a new subdirectory named after the repository, so the clone never lands in the workspace root. |
 | `branch` | Branch or tag to check out instead of the remote default. |
 | `depth` | Create a shallow clone of this many commits. |
-| `requireEmpty` | When `true`, refuse to clone unless the target is missing or empty. |
 
 ### `github_sync`
 
@@ -372,8 +407,40 @@ over an existing repository is worth surfacing loudly.
 
 ## Install state
 
-The bundle is installed in the `desktop` profile as
-`dsh-github-sync` → `link:D:/软件开发/dsh/dsh-github-sync`. The Host pins the
-plugin module in its ESM cache, so a change to the Host half requires a DSH
-restart; the Client half is served as a revisioned bundle and is picked up when
-its artifact changes.
+The bundle is installed in the `desktop` profile as a **GitHub dependency**, not
+as a link to a checkout. The profile's `package.json`
+(`~/.dsh/profiles/<profile>/package.json`) reads:
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "dsh-github-sync"]
+    }
+  },
+  "dependencies": {
+    "dsh-github-sync": "github:fw867/dsh-github-sync"
+  }
+}
+```
+
+pnpm (`nodeLinker: hoisted`) materializes that reference as a **real copy** under
+the profile's `node_modules`, with no `.git` and no reparse point back to any
+working tree. Editing a checkout therefore changes nothing that DSH loads: the
+copy is only replaced when the dependency is installed again — for the Plugin
+Manager, an update of the plugin row.
+
+So the round trip for a change is:
+
+1. commit and push it to `github.com/fw867/dsh-github-sync`;
+2. update the plugin in the Plugin Manager (which re-runs the profile install);
+3. restart DSH for a Host-half change, and reload the page for a Client-half one.
+
+A `link:` (or `file:`) dependency pointed at the checkout replaces steps 1–2 for
+local development: the profile then reads the working tree directly, and only the
+Host module cache still needs the restart. It is a development arrangement, so it
+does not belong in this repository's documented install.
+
+The Host pins the plugin module in its ESM cache, so a Host-half change always
+needs the restart; the Client half is served as a revisioned bundle and is picked
+up when its artifact changes.

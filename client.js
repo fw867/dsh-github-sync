@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
       'menu.checking': 'Checking this workspace…',
       'menu.found': 'Repository detected.',
       'menu.empty.hint': 'This workspace has no repository yet. Clone one, or create a new one here.',
-      'menu.noClone': 'This folder already contains files, so cloning here is not offered. Create a repository instead, or clear the folder.',
+      'menu.cloneNote': 'The clone adds a subdirectory named after the repository, so the files already here are left alone.',
       'menu.empty.cloneLabel': 'Clone from GitHub:',
       'menu.empty.initHint': 'Creates .git here and stages the current files.',
       'menu.connect.hint': 'This repository has no remote yet. Where should it live on GitHub?',
@@ -82,7 +82,7 @@ window.__ModuleLoader__.load({
       'menu.checking': '正在检查当前工作区…',
       'menu.found': '已检测到 Git 仓库。',
       'menu.empty.hint': '当前工作区还没有 Git 仓库。可以克隆一个，或在这里新建。',
-      'menu.noClone': '该文件夹已有文件，因此不提供克隆。可以改为新建仓库，或先清空文件夹。',
+      'menu.cloneNote': '克隆会新建一个以仓库命名的子文件夹，这里已有的文件不会被改动。',
       'menu.empty.cloneLabel': '从 GitHub 克隆：',
       'menu.empty.initHint': '会创建 .git 并将现有文件加入暂存区。',
       'menu.connect.hint': '这个仓库还没有远端。它应该放在 GitHub 的哪里？',
@@ -129,17 +129,6 @@ window.__ModuleLoader__.load({
       { id: 'status', key: 'action.refresh' },
       { id: 'commit', key: 'action.commit' },
     ]
-
-    /**
-     * Whether the clone flow may be offered for a probed workspace.
-     *
-     * Cloning into a folder that already holds files mixes two unrelated trees,
-     * so the entry is omitted rather than shown and then refused — the same rule
-     * as for a missing remote: never offer what cannot succeed. An unanswered
-     * check keeps it, which is what lets a hanging probe degrade instead of
-     * block.
-     */
-    const canCloneInto = (probe) => probe?.empty !== false
 
     /**
      * Last known workspace state, per session.
@@ -260,7 +249,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r14'
+    const BUILD = 'r15'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -903,19 +892,24 @@ window.__ModuleLoader__.load({
       ]
 
       // The state line above already explains the situation, so this list only
-      // carries the entries that resolve it. Cloning is offered only when the
-      // folder is known to be empty, because that is the only case it can serve.
+      // carries the entries that resolve it. Cloning is offered for every
+      // workspace without a repository, empty or not: the clone never lands in
+      // the workspace root — it gets a directory of its own, by default one
+      // named after the repository — so files already there are not in its way.
+      // The engine still refuses a target that exists and holds files, and names
+      // it, which is the one case an explicit directory resolves.
       const emptyMenu = [
-        ...(canCloneInto(probe)
-          ? [
-              React.createElement('div', { key: 'clone-label', style: S.hint }, t('menu.empty.cloneLabel')),
-              React.createElement(
-                'div',
-                { key: 'clone', style: { padding: '0 0 4px' } },
-                renderUrlRow(t('action.clone'), t('field.cloneLabel'), '/github clone'),
-              ),
-            ]
-          : [React.createElement('div', { key: 'no-clone', style: S.hint }, t('menu.noClone'))]),
+        React.createElement('div', { key: 'clone-label', style: S.hint }, t('menu.empty.cloneLabel')),
+        React.createElement(
+          'div',
+          { key: 'clone', style: { padding: '0 0 4px' } },
+          renderUrlRow(t('action.clone'), t('field.cloneLabel'), '/github clone'),
+        ),
+        // Said only where it answers the question the user is about to ask:
+        // a folder that already holds files is exactly that case.
+        ...(probe?.empty === false
+          ? [React.createElement('div', { key: 'clone-note', style: S.hint }, t('menu.cloneNote'))]
+          : []),
         React.createElement(
           'button',
           {
