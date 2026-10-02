@@ -60,6 +60,15 @@ window.__ModuleLoader__.load({
       'changes.all': 'all {total} selected',
       'changes.include': 'Include {path} in the next commit',
       'changes.unrepresentable': 'A path containing a double quote cannot be named on the /github line; commit it from the tool or a terminal.',
+      'change.modified': 'modified',
+      'change.added': 'added',
+      'change.deleted': 'deleted',
+      'change.renamed': 'renamed',
+      'change.copied': 'copied',
+      'change.type': 'type changed',
+      'change.untracked': 'untracked',
+      'change.conflicted': 'conflicted',
+      'change.staged': 'staged {what}',
       'branches.title': 'Branches',
       'branches.current': 'the branch in use',
       'branches.switchLabel': 'Switch to {name}',
@@ -123,6 +132,15 @@ window.__ModuleLoader__.load({
       'changes.all': '已全选 {total} 项',
       'changes.include': '把 {path} 纳入下次提交',
       'changes.unrepresentable': '路径里含双引号，无法写在 /github 命令行上；请用工具或终端提交它。',
+      'change.modified': '已修改',
+      'change.added': '新增',
+      'change.deleted': '已删除',
+      'change.renamed': '已重命名',
+      'change.copied': '已复制',
+      'change.type': '类型改变',
+      'change.untracked': '未跟踪',
+      'change.conflicted': '有冲突',
+      'change.staged': '已暂存{what}',
       'branches.title': '分支',
       'branches.current': '当前所在分支',
       'branches.switchLabel': '切换到 {name}',
@@ -187,6 +205,32 @@ window.__ModuleLoader__.load({
      * for another one.
      */
     const probeAttempted = new Set()
+
+    /**
+     * Which answer each session's cache holds: `slim` or `full`.
+     *
+     * Every probe is a logged command row, so the answer that runs on mount asks
+     * only for the badge's fields. Opening the menu needs the change list and the
+     * branch list, and this map is how the control knows the cached answer does
+     * not have them yet.
+     */
+    const probeShape = new Map()
+
+    /** When each session's full answer arrived, so a quick reopen reuses it. */
+    const probeFresh = new Map()
+
+    /**
+     * Sessions whose full answer has been asked for once.
+     *
+     * Opening and closing a menu must not append a probe row per open, so the
+     * full answer follows the same once-per-session rule as the mount answer;
+     * only a completed action, an explicit retry, or an answer older than
+     * {@link FULL_PROBE_FRESH_MS} asks again.
+     */
+    const probeFullAttempted = new Set()
+
+    /** How long a full answer is reused before the menu asks again. */
+    const FULL_PROBE_FRESH_MS = 10000
 
     /**
      * Whether a workspace may be checked as soon as a session appears.
@@ -283,7 +327,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r18'
+    const BUILD = 'r20'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -469,6 +513,38 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * What git's two status letters mean, in the reader's language.
+     *
+     * The probe carries the letters and nothing else — one logged command row is
+     * not the place for prose — so the words are built here, where the active
+     * locale is known.
+     */
+    function changeWords(code, t) {
+      const letters = String(code ?? '')
+      if (letters === '??') return t('change.untracked')
+      if (['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(letters)) return t('change.conflicted')
+      const word = (letter) =>
+        letter === undefined || letter === ' '
+          ? undefined
+          : t(
+              {
+                M: 'change.modified',
+                A: 'change.added',
+                D: 'change.deleted',
+                R: 'change.renamed',
+                C: 'change.copied',
+                T: 'change.type',
+              }[letter] ?? 'change.modified',
+            )
+      const staged = word(letters[0])
+      const worktree = word(letters[1])
+      const parts = []
+      if (staged !== undefined) parts.push(t('change.staged', { what: staged }))
+      if (worktree !== undefined) parts.push(worktree)
+      return parts.length === 0 ? t('change.modified') : parts.join(' · ')
+    }
+
+    /**
      * How the probed repository's location reads in the tooltip.
      *
      * A repository found in a subdirectory is worth naming, because "this
@@ -627,9 +703,11 @@ window.__ModuleLoader__.load({
        * Probe one session's workspace and cache the result.
        *
        * This runs `/github status --json`, which is a real command: the Host
-       * logs a `command/run`/`command/done` pair, so each probe is a visible
-       * row in that session's conversation. The per-session cache is what keeps
-       * that cost to one row per session instead of one row per menu open.
+       * logs a `command/run`/`command/done` pair, so each probe is a visible row
+       * in that session's conversation. Two things keep that cost down: the
+       * per-session cache, and asking for the smallest answer that serves the
+       * caller — `slim` for the badge on mount, full only when the menu needs the
+       * change and branch lists.
        *
        * The call is bounded and total. A Remote call that never settles would
        * otherwise leave `busy` set forever — and since a busy probe is what the
@@ -639,8 +717,9 @@ window.__ModuleLoader__.load({
        *
        * @param targetSession - the session to probe.
        * @param announceFailure - whether to record a failure for the menu to show.
+       * @param options.slim - ask for the badge's fields only.
        */
-      const refresh = async (targetSession, announceFailure) => {
+      const refresh = async (targetSession, announceFailure, options) => {
         const address = targetSession ?? sessionId
         if (address === undefined) return
         const controller = new AbortController()
@@ -650,7 +729,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
         try {
           const outcome = await Promise.race([
-            probeOnce(address, announceFailure, controller.signal),
+            probeOnce(address, announceFailure, controller.signal, options),
             expired,
           ])
           if (outcome !== PROBE_TIMEOUT) return
@@ -661,6 +740,7 @@ window.__ModuleLoader__.load({
           setBusy(null)
           setActionBusy(null)
           probeCache.delete(address)
+          probeShape.delete(address)
           if (announceFailure === true) {
             setProbeError(t('error.probeFailed', { reason: t('error.probeTimeout') }))
           }
@@ -676,8 +756,10 @@ window.__ModuleLoader__.load({
        * @param address - the session to address.
        * @param announceFailure - whether to record a failure for the menu to show.
        * @param signal - cancellation forwarded to the Remote call.
+       * @param options.slim - ask for the badge's fields only.
        */
-      const probeOnce = async (address, announceFailure, signal) => {
+      const probeOnce = async (address, announceFailure, signal, options) => {
+        const slim = options?.slim === true
         // Does this session even offer the command? This is a cheap read with no
         // session record, and it turns the likeliest cause of a hanging invoke
         // into a specific answer instead of a timeout. It is bounded and
@@ -700,11 +782,12 @@ window.__ModuleLoader__.load({
         }
 
         const choice = targetChoice.get(address)
-        const probeLine =
-          choice === undefined ? '/github status --json' : `/github status --json --dir "${choice}"`
+        const scope = choice === undefined ? '' : ` --dir "${choice}"`
+        const probeLine = `/github status --json${scope}${slim ? ' --slim' : ''}`
         const outcome = await run(probeLine, { quiet: true, probe: true, signal }, address)
         if (outcome.text === undefined) {
           probeCache.delete(address)
+          probeShape.delete(address)
           if (announceFailure === true) {
             setProbeError(
               outcome.failure === undefined
@@ -717,6 +800,8 @@ window.__ModuleLoader__.load({
         try {
           const parsed = JSON.parse(outcome.text)
           probeCache.set(address, parsed)
+          probeShape.set(address, slim ? 'slim' : 'full')
+          if (slim !== true) probeFresh.set(address, Date.now())
           // The answer carries the deployment's eager-check preference; remember
           // it so sessions created later follow it.
           if (typeof parsed?.statusOnMount === 'boolean') {
@@ -728,6 +813,7 @@ window.__ModuleLoader__.load({
           // a repository is present, which is the decision this probe drives.
           // The neutral label keeps it from claiming a branch it never learned.
           probeCache.set(address, { state: 'repo', branch: null, dirty: false, ahead: null, behind: null })
+          probeShape.set(address, slim ? 'slim' : 'full')
           setProbeError(null)
         }
       }
@@ -752,6 +838,9 @@ window.__ModuleLoader__.load({
       //
       // `probeAttempted` is the gate rather than the cache, so a probe that
       // hangs — which caches nothing — is still attempted only once per session.
+      //
+      // The mount answer is asked for slim: it runs for every session, and the
+      // badge it feeds needs the branch and the drift, not the change list.
       React.useEffect(() => {
         if (sessionId === undefined || !eagerAllowed) return undefined
         if (probeCache.has(sessionId) || probeAttempted.has(sessionId)) return undefined
@@ -759,7 +848,7 @@ window.__ModuleLoader__.load({
         let cancelled = false
         const probeWorkspace = async () => {
           try {
-            await refresh(sessionId, true)
+            await refresh(sessionId, true, { slim: true })
           } catch (error) {
             // Nothing may leave the menu waiting: a rejection here would leave
             // the busy state set with no further attempt coming.
@@ -776,11 +865,16 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sessionId])
 
-      // With eager checks disabled, the first open is what pays for the answer.
+      // Opening the menu is what needs the panel's data: the change list and the
+      // branch list. A slim answer from the mount probe does not have them, and a
+      // fresh full answer is reused rather than paid for again — otherwise every
+      // open and close would append another probe row to the conversation.
       React.useEffect(() => {
-        if (!open || sessionId === undefined || eagerAllowed) return undefined
-        if (probeCache.has(sessionId) || probeAttempted.has(sessionId)) return undefined
-        probeAttempted.add(sessionId)
+        if (!open || sessionId === undefined) return undefined
+        const shape = probeShape.get(sessionId)
+        if (shape === 'full' && Date.now() - (probeFresh.get(sessionId) ?? 0) < FULL_PROBE_FRESH_MS) return undefined
+        if (probeFullAttempted.has(sessionId)) return undefined
+        probeFullAttempted.add(sessionId)
         let cancelled = false
         const probeOnOpen = async () => {
           try {
@@ -799,14 +893,45 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [open, sessionId])
 
-      // Re-render after a probe writes to the cache.
+      // Dismiss the menu on the interactions that mean "I am done here": Escape,
+      // a press anywhere outside the control, focus moving out of it, or the
+      // window losing focus. A popup that survives a click elsewhere covers the
+      // thing the person just clicked, which is why this is not optional.
       React.useEffect(() => {
         if (!open) return undefined
         const onKey = (event) => {
           if (event.key === 'Escape') setOpen(false)
         }
+        // The control marks itself so containment can be asked of the event
+        // target alone, without holding a node reference across renders.
+        const inside = (target) => {
+          try {
+            return typeof target?.closest === 'function' && target.closest('[data-github-sync]') !== null
+          } catch {
+            return false
+          }
+        }
+        const onPointerDown = (event) => {
+          if (!inside(event.target)) setOpen(false)
+        }
+        const onFocusIn = (event) => {
+          if (!inside(event.target)) setOpen(false)
+        }
+        const onWindowBlur = () => setOpen(false)
+        // Capture, because a press handled by something below must still dismiss
+        // this first: the menu is drawn over whatever it covers.
         document.addEventListener('keydown', onKey)
-        return () => document.removeEventListener('keydown', onKey)
+        document.addEventListener('pointerdown', onPointerDown, true)
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('focusin', onFocusIn)
+        window.addEventListener('blur', onWindowBlur)
+        return () => {
+          document.removeEventListener('keydown', onKey)
+          document.removeEventListener('pointerdown', onPointerDown, true)
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('focusin', onFocusIn)
+          window.removeEventListener('blur', onWindowBlur)
+        }
       }, [open])
 
       // Only a user action disables the menu. The background check never does,
@@ -900,7 +1025,7 @@ window.__ModuleLoader__.load({
                   }),
                   React.createElement(
                     'span',
-                    { style: S.changePath, title: `${entry.path} — ${entry.description ?? ''}` },
+                    { style: S.changePath, title: `${entry.path} — ${changeWords(entry.code, t)}` },
                     entry.path,
                   ),
                   React.createElement(
@@ -1170,7 +1295,9 @@ window.__ModuleLoader__.load({
 
       return React.createElement(
         'div',
-        { style: S.wrap },
+        // `data-github-sync` is the containment boundary the dismiss listeners
+        // ask about: a press inside it is the control's own.
+        { style: S.wrap, 'data-github-sync': '' },
         React.createElement(
           'button',
           {
@@ -1237,8 +1364,10 @@ window.__ModuleLoader__.load({
                       style: style(S.item, disabled ? S.itemDisabled : undefined),
                       onClick: () => {
                         // An explicit retry is a new attempt, so it clears the
-                        // once-per-session gate as well as the recorded failure.
+                        // once-per-session gates as well as the recorded failure.
                         probeAttempted.delete(sessionId)
+                        probeFullAttempted.delete(sessionId)
+                        probeFresh.delete(sessionId)
                         setProbeError(null)
                         void refresh(sessionId, true)
                       },

@@ -102,6 +102,13 @@ The menu offers:
 The state is read when a session first appears, so switching to another workspace
 immediately shows that workspace's sync state rather than the previous one's.
 
+**The menu dismisses itself when it should.** Escape, a press anywhere outside the
+control, keyboard focus moving out of it, and the window losing focus all close
+it; the listeners are registered only while it is open, and released when it
+closes. A press inside the control — its own button or any of its items — does
+not, because that press *is* the interaction. A popup that survives a click
+elsewhere is covering the thing the person just clicked.
+
 ### Why a check leaves a row, and how to stop it
 
 There is exactly **one** channel from the Client half to the Host: the Remote
@@ -112,18 +119,28 @@ Typert-generated descriptor plus a contribution to the api-remotes assembly, bot
 of which are produced at build time from packages this workspace bundle does not
 have.
 
-So every check is a visible row in that session's conversation. Two knobs decide
-what that costs:
+So every check is a visible row in that session's conversation. The row cannot be
+removed, so it is kept small and rare instead:
 
-| Setting | Behaviour |
+| Lever | What it does |
 |---|---|
 | `statusOnMount: true` (default) | The workspace is checked when a session appears, so the sync badge is live without opening anything. One row per session. |
 | `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened stays clean. |
+| `status --json --slim` | The mount check asks for the badge's fields only: no change list, no branch list. Its answer is ~350 bytes whatever the working tree holds — the test asserts that it does not grow with the change count, while the full answer does. |
+| `--slim` is only for the badge | Opening the menu asks for the full answer, because the panel needs the change and branch lists. |
+| One full answer per session, reused for 10s | Opening and closing the menu does not append a row per open: a full answer younger than ten seconds is reused, and otherwise the full answer is asked for once. A completed action, an explicit **Check again**, or a target change asks again. |
+| Read-only actions never re-check | `diff` (and `changes`, `status`, `auth`) cannot alter what the probe reports, so they do not trigger a check. Only actions that change the repository do. |
 
 The preference lives in Host config, which the Client cannot read, so it arrives
 with a check's answer and applies to the sessions created after that. The first
 check of a freshly loaded page is therefore always eager — it is what teaches the
 Client the setting.
+
+The probe payload carries only what a caller cannot work out for itself: each
+change is a `path` and git's two status letters, and the words a person reads
+(`staged added`, `modified`) are built where they are rendered, in the active
+language. That is also why the control's copy for those words is localized while
+the JSON is not.
 
 ### Keeping the counts honest
 
