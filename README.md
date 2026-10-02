@@ -488,6 +488,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     remote: origin
     branch: ''                # branch to check out after a fresh clone
     generateCommitMessage: true
+    commitMaxTokens: 900     # one generated message, reasoning included
     commitLanguage: auto      # auto follows the local language; zh/en force one
     commitProvider: ''        # provider route for message generation
     commitModel: ''           # model id for message generation
@@ -509,21 +510,23 @@ competes in and for what the machine may already offer.
 A wrong-typed or unknown field fails activation with a clear message rather than
 silently changing behaviour mid-push.
 
-## Commit titles
+## Commit messages
 
 `commit` and `sync` stage every change, then produce a
-[Conventional Commits](https://www.conventionalcommits.org/) subject that says
-what changed, in the language the workspace runs in:
+[Conventional Commits](https://www.conventionalcommits.org/) **message** — a
+subject line and a short body — in the language the workspace runs in:
 
 1. The model named by `commitProvider`/`commitModel`, else the deployment's
-   default model, is asked for one subject line using the staged diff, the
-   diffstat, and the recent subjects. It is told to name the module, behaviour,
-   command, or file that actually changed — never how many files changed — and
-   to write the summary in the resolved language.
+   default model, is asked for the message using the staged diff, the diffstat,
+   and the recent subjects. The prompt asks for a subject that names the module,
+   behaviour, command, or option that changed — never how many files changed, and
+   never just the name of a symbol that was added — followed by two to four
+   bullets saying what the change does now and why it matters. Both parts are
+   written in the resolved language, with the type token left in English.
 2. If generation is disabled, unavailable, or returns nothing, a deterministic
-   synthesis builds the subject from the change set, so a push is never blocked
-   by the generator. It reads `git diff --cached --name-status` and the staged
-   patch, and names the change in this order:
+   synthesis builds the **subject** from the change set, so a push is never
+   blocked by the generator. It reads `git diff --cached --name-status` and the
+   staged patch, and names the change in this order:
    - the declarations the patch adds or removes (`feat(commit): add
      resolveSubjectLanguage`),
    - the documentation section an added heading opens (`docs: update the
@@ -538,14 +541,31 @@ what changed, in the language the workspace runs in:
 The subject language is `commitLanguage` when it names one, and otherwise the
 local language: `LC_ALL`/`LC_MESSAGES`/`LANG`, then the runtime's resolved
 locale — on Windows, the user's regional setting, so a `zh-CN` machine gets
-Chinese subjects without any configuration. `zh` and `en` force one. The
+Chinese messages without any configuration. `zh` and `en` force one. The
 **type token stays English** in both, so `feat`/`fix`/`docs` still parse in a
-changelog; only the summary is localized.
+changelog; only the prose is localized.
 
-Pass `--message "<subject>"` (command) or `message` (tool) to use a subject
-verbatim instead. When the deterministic path is used, the commit step reports
-why — a missing model route, an aborted stream, or a model that returned no
-text — so a changed message style is never unexplained.
+A generated body is committed as a second `-m`, which is how git joins the
+paragraphs, and the commit step shows the message that landed followed by git's
+own summary — not an echoed command line carrying a multi-paragraph argument.
+
+Pass `--message "<subject>"` (command) or `message` (tool) to use a message
+verbatim instead — that path takes no body, since you wrote it.
+
+### Why the model call is shaped the way it is
+
+Two details of the call are there because of a failure worth recording. The
+completion budget (`commitMaxTokens`, 900) covers **reasoning as well as text**:
+with the 200 it started at, a thinking model spent the whole budget on
+`reasoning-delta` chunks and streamed no `text-delta` at all, so every commit
+fell back to the deterministic subject with the note "model returned no text".
+
+The call therefore also carries `purpose: 'session-title'`. That is the adapter's
+own signal for "a utility answer, do not reason" — the DeepSeek adapter maps it
+to reasoning effort `off`, and DSH's session-title generator calls the model the
+same way. The fallback note counts the chunks it saw
+(`model returned no text (0 text, 137 reasoning, 0 other chunks)`), so a
+reasoning-only answer is distinguishable from a provider that failed.
 
 ## Tool reference
 
