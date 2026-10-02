@@ -50,6 +50,23 @@ window.__ModuleLoader__.load({
       'state.dirty': 'uncommitted changes',
       'state.ahead': '{count} to push',
       'state.behind': '{count} to pull',
+      'changes.title': 'Changes',
+      'changes.summary': '{total} changed · {staged} staged',
+      'changes.truncated': 'showing the first {shown}; more paths changed',
+      'changes.diff': 'Diff',
+      'changes.diffLabel': 'Show the diff of {path}',
+      'changes.noneSelected': 'Nothing is selected, so there is nothing to commit. Tick at least one path.',
+      'changes.selected': '{count} of {total} selected for the next commit',
+      'changes.all': 'all {total} selected',
+      'changes.include': 'Include {path} in the next commit',
+      'changes.unrepresentable': 'A path containing a double quote cannot be named on the /github line; commit it from the tool or a terminal.',
+      'branches.title': 'Branches',
+      'branches.current': 'the branch in use',
+      'branches.switchLabel': 'Switch to {name}',
+      'branches.create': 'Create',
+      'branches.newLabel': 'New branch name',
+      'branches.newPlaceholder': 'feature/name',
+      'branches.truncated': 'showing the {shown} most recent; /github branches lists every one',
       'target.subdirectory': 'repository in {name}',
       'menu.target.label': 'Which repository:',
       'menu.target.entry': 'Repository in {name}',
@@ -96,6 +113,23 @@ window.__ModuleLoader__.load({
       'state.dirty': '有未提交改动',
       'state.ahead': '{count} 个待推送',
       'state.behind': '{count} 个待拉取',
+      'changes.title': '改动',
+      'changes.summary': '共 {total} 项改动 · 已暂存 {staged}',
+      'changes.truncated': '只显示前 {shown} 项，还有更多改动',
+      'changes.diff': '差异',
+      'changes.diffLabel': '查看 {path} 的差异',
+      'changes.noneSelected': '没有选中任何文件，无法提交。请至少勾选一项。',
+      'changes.selected': '已选中 {count}/{total} 项，将进入下次提交',
+      'changes.all': '已全选 {total} 项',
+      'changes.include': '把 {path} 纳入下次提交',
+      'changes.unrepresentable': '路径里含双引号，无法写在 /github 命令行上；请用工具或终端提交它。',
+      'branches.title': '分支',
+      'branches.current': '当前所在分支',
+      'branches.switchLabel': '切换到 {name}',
+      'branches.create': '新建',
+      'branches.newLabel': '新分支名',
+      'branches.newPlaceholder': 'feature/name',
+      'branches.truncated': '只显示最近 {shown} 个；/github branches 可列出全部',
       'target.subdirectory': '仓库位于 {name}',
       'menu.target.label': '操作哪个仓库：',
       'menu.target.entry': '{name} 中的仓库',
@@ -249,7 +283,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r15'
+    const BUILD = 'r17'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -314,6 +348,35 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       itemDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
+      changeRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '1px 8px',
+      },
+      changePath: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      changeAction: {
+        flex: '0 0 auto',
+        height: 20,
+        padding: '0 6px',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 4,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 11,
+        lineHeight: '14px',
+        cursor: 'pointer',
+      },
       hint: {
         padding: '2px 8px 6px',
         color: 'var(--dsw-alias-label-secondary)',
@@ -484,6 +547,11 @@ window.__ModuleLoader__.load({
       const [failed, setFailed] = React.useState(false)
       const [url, setUrl] = React.useState('')
       const [probeError, setProbeError] = React.useState(null)
+      // Paths the next commit should leave out. Kept as the exclusion set rather
+      // than the selection so "everything" stays the default and survives a
+      // probe refresh that adds files.
+      const [excluded, setExcluded] = React.useState(() => new Set())
+      const [branchName, setBranchName] = React.useState('')
 
       // A ref mirrors the latest Remote namespace so the probe effect below can
       // depend on the session and the open state alone, without re-firing when
@@ -772,6 +840,168 @@ window.__ModuleLoader__.load({
         return choice === null ? '' : ` --dir "${choice}"`
       }
 
+      // The change list the probe reported, and which paths the next commit
+      // should leave out. Unchecking is how a person says "not this one", so the
+      // default is an empty set that means everything — and the command stays a
+      // plain `/github commit`, however many files changed.
+      //
+      // A path containing a double quote cannot be written on the `/github`
+      // line at all; it is listed, marked, and simply left out of a narrowed
+      // selection rather than being silently mis-quoted.
+      const changed = Array.isArray(probe?.changes) ? probe.changes : []
+      const counts = probe?.counts
+      const named = changed.filter((entry) => typeof entry?.path === 'string' && entry.path.length > 0)
+      const selectable = named.filter((entry) => !entry.path.includes('"'))
+      const selected = selectable.filter((entry) => !excluded.has(entry.path))
+      const narrowing = excluded.size > 0
+      const nothingSelected = narrowing && selected.length === 0
+      const fileSuffix = narrowing ? selected.map((entry) => ` --file "${entry.path}"`).join('') : ''
+
+      /** Tick or untick one path for the next commit. */
+      const togglePath = (path) => {
+        setExcluded((current) => {
+          const next = new Set(current)
+          if (next.has(path)) next.delete(path)
+          else next.add(path)
+          return next
+        })
+      }
+
+      const changesPanel =
+        named.length === 0
+          ? null
+          : [
+              React.createElement(
+                'div',
+                { key: 'changes-label', style: S.hint },
+                typeof counts?.total === 'number' && typeof counts?.staged === 'number'
+                  ? `${t('changes.title')} — ${t('changes.summary', { total: counts.total, staged: counts.staged })}`
+                  : t('changes.title'),
+              ),
+              React.createElement(
+                'div',
+                { key: 'changes-summary', style: S.hint },
+                nothingSelected
+                  ? t('changes.noneSelected')
+                  : narrowing
+                    ? t('changes.selected', { count: selected.length, total: named.length })
+                    : t('changes.all', { total: named.length }),
+              ),
+              ...selectable.map((entry) =>
+                React.createElement(
+                  'div',
+                  { key: `change-${entry.path}`, style: S.changeRow },
+                  React.createElement('input', {
+                    type: 'checkbox',
+                    checked: !excluded.has(entry.path),
+                    disabled,
+                    'aria-label': t('changes.include', { path: entry.path }),
+                    onChange: () => togglePath(entry.path),
+                  }),
+                  React.createElement(
+                    'span',
+                    { style: S.changePath, title: `${entry.path} — ${entry.description ?? ''}` },
+                    entry.path,
+                  ),
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled,
+                      style: style(S.changeAction, disabled ? S.itemDisabled : undefined),
+                      title: t('changes.diffLabel', { path: entry.path }),
+                      onClick: () => {
+                        void run(`/github diff --file "${entry.path}"${dirSuffix(sessionId)}`)
+                      },
+                    },
+                    t('changes.diff'),
+                  ),
+                ),
+              ),
+              ...(probe?.changesTruncated === true
+                ? [React.createElement('div', { key: 'changes-more', style: S.hint }, t('changes.truncated', { shown: named.length }))]
+                : []),
+              ...(narrowing && named.length !== selectable.length
+                ? [React.createElement('div', { key: 'changes-quote', style: S.hint }, t('changes.unrepresentable'))]
+                : []),
+            ]
+
+      /**
+       * Every local branch the check reported, with the checked-out one marked.
+       *
+       * Switching is one click; creating one is the name typed below. Deleting is
+       * deliberately not offered here: it is the one branch action that can lose
+       * commits, so it stays on `/github delete-branch`, where it takes a name
+       * and a `--force`.
+       */
+      const branchList = Array.isArray(probe?.branches)
+        ? probe.branches.filter((entry) => typeof entry?.name === 'string' && entry.name.length > 0)
+        : []
+
+      /** Create the branch named in the field and switch to it. */
+      const createBranch = () => {
+        const name = branchName.trim()
+        if (name.length === 0) return
+        void run(`/github switch --create "${name}"${dirSuffix(sessionId)}`).then(() => {
+          setBranchName('')
+          void refresh()
+        })
+      }
+
+      const branchesPanel =
+        branchList.length === 0
+          ? null
+          : [
+              React.createElement('div', { key: 'branches-label', style: S.hint }, t('branches.title')),
+              ...branchList.map((entry) => {
+                const track = `${entry.ahead > 0 ? ` ↑${entry.ahead}` : ''}${entry.behind > 0 ? ` ↓${entry.behind}` : ''}`
+                return React.createElement(
+                  'button',
+                  {
+                    key: `branch-${entry.name}`,
+                    type: 'button',
+                    role: 'menuitemradio',
+                    'aria-checked': entry.current === true,
+                    disabled: disabled || entry.current === true,
+                    title: entry.current === true ? t('branches.current') : t('branches.switchLabel', { name: entry.name }),
+                    style: style(S.item, disabled || entry.current === true ? S.itemDisabled : undefined),
+                    onClick: () => {
+                      void run(`/github switch "${entry.name}"${dirSuffix(sessionId)}`).then(() => refresh())
+                    },
+                  },
+                  `${entry.current === true ? '● ' : '○ '}${entry.name}${track}${entry.gone === true ? ' (gone)' : ''}`,
+                )
+              }),
+              React.createElement(
+                'div',
+                { key: 'branch-new', style: S.field },
+                React.createElement('input', {
+                  style: S.input,
+                  placeholder: t('branches.newPlaceholder'),
+                  value: branchName,
+                  spellCheck: false,
+                  'aria-label': t('branches.newLabel'),
+                  onChange: (event) => setBranchName(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter') createBranch()
+                  },
+                }),
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: disabled || branchName.trim().length === 0,
+                    style: style(S.action, disabled || branchName.trim().length === 0 ? S.itemDisabled : undefined),
+                    onClick: () => createBranch(),
+                  },
+                  t('branches.create'),
+                ),
+              ),
+              ...(probe?.branchesTruncated === true
+                ? [React.createElement('div', { key: 'branches-more', style: S.hint }, t('branches.truncated', { shown: branchList.length }))]
+                : []),
+            ]
+
       /** Point this session at a directory and re-read the workspace. */
       const chooseTarget = (name) => {
         if (sessionId === undefined) return
@@ -780,7 +1010,6 @@ window.__ModuleLoader__.load({
         setOpen(false)
         void refresh(sessionId, true)
       }
-
       // Offered whenever the workspace holds a repository below its root, plus
       // an entry to go back to the workspace itself.
       const targetMenu = candidates.length === 0
@@ -857,22 +1086,34 @@ window.__ModuleLoader__.load({
           ),
         )
 
-      const repoMenu = (remoteMissing ? CONNECT_ACTIONS : REPO_ACTIONS).map((action) =>
-        React.createElement(
+      const repoMenu = (remoteMissing ? CONNECT_ACTIONS : REPO_ACTIONS).map((action) => {
+        // Commit and sync are the two actions a narrowed selection changes; the
+        // label says how many paths will go in, so the effect of unticking is
+        // visible before the click.
+        const commitLike = action.id === 'commit' || action.id === 'sync'
+        const blocked = commitLike && nothingSelected
+        const label = commitLike && narrowing ? `${t(action.key)} · ${selected.length}` : t(action.key)
+        return React.createElement(
           'button',
           {
             key: action.id,
             type: 'button',
             role: 'menuitem',
-            disabled,
-            style: style(S.item, disabled ? S.itemDisabled : undefined),
+            disabled: disabled || blocked,
+            title: blocked ? t('changes.noneSelected') : undefined,
+            style: style(S.item, disabled || blocked ? S.itemDisabled : undefined),
             onClick: () => {
-              void run(`/github ${action.id}${dirSuffix(sessionId)}`).then(() => refresh())
+              void run(`/github ${action.id}${dirSuffix(sessionId)}${commitLike ? fileSuffix : ''}`).then(() => {
+                // A recorded selection belongs to the commit that used it: the
+                // next change to the same path starts included again.
+                if (commitLike) setExcluded(new Set())
+                void refresh()
+              })
             },
           },
-          t(action.key),
-        ),
-      )
+          label,
+        )
+      })
 
       // A local repository with no remote needs one, and this is where it gets
       // one: the URL connects `origin`, then commits and pushes in the same
@@ -996,12 +1237,16 @@ window.__ModuleLoader__.load({
                     },
                     t('action.retry'),
                   ),
+              // The change list sits above the actions it narrows: what is about
+              // to be committed is the question the buttons below answer.
+              probeError === null && isRepo ? changesPanel : null,
               // The repository actions are offered while the check is still in
               // flight as well, so a probe that never answers degrades the menu
               // to "unverified" rather than freezing it. Without an answer the
               // clone and init entries are withheld, because offering them for a
               // workspace that may already be a repository is the worse guess.
               probeError === null && (probe === null || isRepo) ? repoMenu : null,
+              probeError === null && isRepo ? branchesPanel : null,
               probeError === null && remoteMissing ? connectMenu : null,
               probe !== null && !isRepo ? emptyMenu : null,
               // Offered last, because it changes what everything above acts on.

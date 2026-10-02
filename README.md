@@ -6,7 +6,7 @@ operation engine with three entry points:
 | Surface | Entry point |
 |---|---|
 | Agent tools | `github_clone` and `github_sync` |
-| Human command | `/github status\|pull\|commit\|push\|sync\|clone <repo>\|init [url]` |
+| Human command | `/github status\|changes\|diff\|stage\|unstage\|commit\|amend\|undo\|branches\|switch\|delete-branch\|pull\|push\|sync\|clone <repo>\|init [url]\|setup <url>\|auth` |
 | Composer UI | a **GitHub** button in the composer tool row that shows the branch and offers these actions |
 
 All three drive the same engine, so a button press, a slash command, and a model
@@ -300,6 +300,160 @@ without activating the plugin and therefore cannot translate through the Client
 service. The agent tools and the `/github` command description are Host-side
 text with no locale service available to them, so they stay English.
 
+## Reviewing changes, and committing only some of them
+
+`commit` records the whole tree by default — but "everything" is a decision, not
+a default, so the plugin also answers *what* is about to be committed and lets a
+caller narrow it.
+
+The workspace check reports the change list along with the branch, so the menu
+needs no second command to draw it. Each path carries its git status code and a
+plain description of it (`staged added`, `modified, not staged`, `untracked`),
+and the menu shows them with a checkbox and a **Diff** button:
+
+- **Ticked is the default.** Unticking a path narrows the next
+  **Commit locally** / **Commit & push**, whose label counts what will go in.
+  Untick everything and the buttons are disabled with the reason, rather than
+  sending a commit that can only do nothing.
+- **Diff** asks for one path's patch. It shows the change against `HEAD` — what
+  committing that path as it stands would record — and falls back to the index in
+  a repository with no commit yet.
+
+The same shape is on both other surfaces:
+
+```
+/github changes                      what changed, and on which side of the index
+/github diff --file "lib/engine.js"  that path's patch
+/github diff --stat                  the diffstat for everything
+/github diff --staged                what is staged, not the whole change
+/github stage --file "lib/a.js" --file "lib/b.js"
+/github unstage --file "lib/a.js"
+/github commit --file "lib/a.js"     commit that path, and only it
+```
+
+`github_sync` takes the same paths as `files`, plus `staged` and `stat` for
+`diff`.
+
+**A narrowed commit really is narrowed.** `files` stages the named paths and then
+commits them with `git commit --only -- <paths>`, which records exactly those
+paths and leaves every other staged change staged. That matters more than it
+sounds: it is the difference between "commit this file" and "commit this file,
+plus whatever else I had staged for later".
+
+The subject is generated from the narrowed scope too, so a commit of one path
+gets a subject about that path rather than about everything else that was dirty.
+
+A named path that did not change is refused **by name** instead of being silently
+dropped — a typo in a path otherwise looks like a commit that did nothing. And a
+named path whose change was undone in the working tree is reported as
+`commit: skipped — nothing to commit in 1 selected path`, not as a failure: the
+request was satisfied, there was simply nothing to record.
+
+`unstage` prefers `git restore --staged`, falls back to `git reset HEAD --` for
+git before 2.23, and to `git rm --cached` in a repository whose first commit does
+not exist yet.
+
+## Branches, amending, and undoing
+
+The daily loop needs three things beyond commit and push: another branch, a
+corrected last commit, and a way back from one that should not have happened.
+
+```
+/github branches                        what is here, and what each one tracks
+/github switch feature/one              move to an existing branch
+/github switch feature/one --create --from main
+/github delete-branch old-topic         refuses an unmerged branch
+/github delete-branch old-topic --force the same, said on purpose
+/github amend --keep --file "lib/a.js"  fold a file into the last commit
+/github amend -m "fix(engine): …"        rewrite only the message
+/github undo                            uncommit, keeping the changes staged
+/github push --force                    --force-with-lease, never a bare --force
+```
+
+`branches` is one `for-each-ref` and reports each local branch with its upstream,
+how far it has drifted (`↑2 ↓1`), whether the upstream is gone, and its relative
+date. The menu renders the same list: the checked-out branch is marked `●` and
+not clickable, another branch is one click away, and a field creates a new one —
+creation is offered there because it cannot lose anything. **Deleting is
+deliberately not** a menu button: it is the one branch action that can drop
+commits, so it takes a name and, for an unmerged branch, an explicit `--force`.
+
+Switching uses `git switch` and falls back to `git checkout` on git before 2.23.
+A switch a dirty working tree would overwrite fails with git's reason **and** a
+sentence saying the tree has uncommitted changes, because "error: Your local
+changes would be overwritten" does not tell you what to do about it.
+
+`amend` has three shapes and they are all explicit:
+
+| Invocation | What it does |
+|---|---|
+| `amend --file <paths>` | Stages those paths and folds them into the last commit, `--only` them. |
+| `amend -m "<subject>"` | Rewrites the message only. |
+| `amend` | Generates a new subject from the staged changes. |
+
+Amending with **nothing** staged and no subject is reported as
+`amend: skipped — nothing is staged`, not performed: the rewrite would change
+nothing but the commit's identity, and silently rewriting history that way is the
+kind of thing a person should have asked for. After an amend the step says the
+branch now differs from its upstream, because publishing it will need force.
+
+`undo` is `git reset --soft HEAD~1`: the commit is gone and **every change it
+held is staged again**, so committing re-creates it. A hard reset is not offered
+at all — it is the version that loses work, and a wrong click must not be able to
+reach it. Undoing the first commit is refused with the reason.
+
+`push --force` adds `--force-with-lease` and nothing else. The lease is what ties
+the overwrite to the remote state this clone last saw: if a colleague pushed in
+the meantime, the force **fails** instead of discarding their work. A bare
+`--force` is never sent, and `delete-branch` does not touch the remote branch at
+all — deleting one there stays an explicit act on GitHub.
+
+## Authentication
+
+A private repository has to prove who is asking, and the plugin does not invent
+an identity: it uses what the machine already has, in the order `auth` names.
+
+| Order | Method | What it uses |
+|---|---|---|
+| 1 | `ssh` | The system's own ssh identity: a key in `~/.ssh`, an entry in `~/.ssh/config`, `GIT_SSH_COMMAND`, `SSH_AUTH_SOCK`, or identities held by ssh-agent. |
+| 2 | `token` | This plugin's `token`/`tokenEnv`, sent as a per-command HTTP header. |
+| 3 | `system` | The system credential helper — Git Credential Manager and the GitHub account it has cached — reached through the plain remote URL. |
+
+`auth: auto` (the default) tries them in that order and **stops at the first
+success**. A named method (`auth: ssh`, `auth: token`, `auth: system`) uses only
+that one, for a deployment that wants the method it has verified.
+
+A failed attempt falls through to the next one **only when the failure is an
+authentication failure**: a rejected push, a diverged branch, or a declined hook
+is reported as it is, because a second identity must never be given the chance to
+succeed where the first was told no.
+
+**ssh needs nothing per repository.** For a clone, the ssh form of the reference
+is used outright (`git@github.com:owner/repo.git`). For a repository whose
+`origin` is https, the rewrite is passed per command —
+`-c url.git@<host>:.insteadOf=https://<host>/` — so `.git/config` is left exactly
+as you left it, and the next fetch is https again.
+
+**The token never reaches a file.** It rides as
+`http.https://<host>/.extraHeader`, for clone, fetch, pull, and push alike, so
+`git remote -v`, `.git/config`, and a later push of repository metadata cannot
+leak it. The host comes from the remote, so a GitHub Enterprise host or a mirror
+is authenticated too.
+
+**Prompts are disabled, credentials that already exist are not.** The Host has no
+terminal to answer a prompt, so `GIT_TERMINAL_PROMPT=0` makes git fail with
+`terminal prompts disabled` instead of blocking. An askpass helper you configured
+is kept, and so is the credential helper: `GCM_INTERACTIVE=never` only stops the
+helper from launching a browser flow on its own. When nothing works, the failure
+names every method tried and what each one said.
+
+Run `/github auth` (or the `auth` action of `github_sync`) to see the whole
+picture before blaming a repository: it reports the ssh identity found here, one
+bounded non-interactive `ssh -T` handshake, the credential helpers configured,
+whether a token is set, the remote in use, and a live `git ls-remote` per method
+— which is the cheapest command that proves credentials work. It never prints a
+secret; the one thing it may write is the host key a first `ssh` records.
+
 ## Configuration
 
 Every field is optional. Set them on the `github-sync` row in the profile's
@@ -322,6 +476,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     commitModel: ''           # model id for message generation
     commitDiffBytes: 12000    # diff context sent to the model
     pullRebase: true          # pull --rebase --autostash
+    auth: auto                # auto: ssh, then token, then the system helper
     fetchOnStatus: false      # fetch before reporting ahead/behind counts
     statusOnMount: true       # check when a session appears, or only when opened
     subdirectory: ''          # repository below the workspace root, when there is one
@@ -331,7 +486,8 @@ Every field is optional. Set them on the `github-sync` row in the profile's
 `token` and `tokenEnv` are read from the plugin config, then `process.env`. The
 token is never written into `.git/config`: it is passed as
 `http.<host>/.extraHeader`, so `git remote -v` and a later push of repository
-metadata cannot leak it.
+metadata cannot leak it. See [Authentication](#authentication) for the order it
+competes in and for what the machine may already offer.
 
 A wrong-typed or unknown field fails activation with a clear message rather than
 silently changing behaviour mid-push.
@@ -389,8 +545,17 @@ text — so a changed message style is never unexplained.
 
 | Argument | Meaning |
 |---|---|
-| `action` (required) | `status`, `pull`, `commit`, `push`, or `sync`. |
+| `action` (required) | `status`, `changes`, `diff`, `stage`, `unstage`, `commit`, `amend`, `undo`, `branches`, `switch`, `delete-branch`, `pull`, `push`, `sync`, `init`, `setup`, or `auth`. |
+| `files` | Paths the action acts on. `commit`/`sync`/`amend` record exactly these and leave other staged changes staged; `stage`/`unstage` move them across the index; `diff` shows their patch. Omitted means everything. |
+| `name` | Branch name for `switch` and `delete-branch`. |
+| `create` / `from` | For `switch`: create the branch, optionally starting at `from`. |
+| `force` | For `push`: `--force-with-lease` (never a bare `--force`). For `delete-branch`: delete an unmerged branch. |
+| `keepMessage` | For `amend`: keep the existing message instead of generating one. |
+| `staged` | For `diff`: show the index rather than every change against `HEAD`. |
+| `stat` | For `diff`: show the diffstat instead of the patch. |
+| `dir` | Repository directory, relative to the workspace or absolute, for every action; for `init`/`setup` it is the directory that becomes the repository root, and the configured `subdirectory` applies when it is omitted. |
 | `repo` | Repository directory; defaults to the session workspace. |
+| `url` | For `init`/`setup`: the remote to record and push to. |
 | `remote` | Remote name; defaults to the plugin config. |
 | `message` | Commit subject used verbatim instead of generating one. |
 | `pull` | For `sync`, pull with rebase before pushing. A failed pull stops the sync before the push. |
