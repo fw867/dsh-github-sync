@@ -113,34 +113,49 @@ elsewhere is covering the thing the person just clicked.
 
 There is exactly **one** channel from the Client half to the Host: the Remote
 command namespace. `commands.execute` appends a `command/run` / `command/done`
-pair to the session before and after the handler runs, unconditionally — the
-registry has no unlogged entry point, and a bespoke Remote namespace would need a
-Typert-generated descriptor plus a contribution to the api-remotes assembly, both
-of which are produced at build time from packages this workspace bundle does not
-have.
+pair to the session before and after the handler runs, unconditionally.
 
-So every check is a visible row in that session's conversation. The row cannot be
-removed, so it is kept small and rare instead:
+**Nothing a plugin can do removes that row.** The evidence, from this DSH
+version's own source: `execute` appends both events before any definition is
+consulted; the only recording switch a command definition may declare is
+`recordInput: false`, which hides the *arguments* and nothing else; the namespace's
+Remote surface is `list` and `execute`, with no silent variant; `CommandSourceMap`
+declares one source kind (`user`); and the row is rendered by the Chat target's own
+event Definitions, which a plugin cannot suppress. So the row is a given, and the
+plugin's only lever is its **size and frequency** — which is what everything below
+is about.
 
 | Lever | What it does |
 |---|---|
 | `statusOnMount: true` (default) | The workspace is checked when a session appears, so the sync badge is live without opening anything. One row per session. |
-| `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened stays clean. |
-| `status --json --slim` | The mount check asks for the badge's fields only: no change list, no branch list. Its answer is ~350 bytes whatever the working tree holds — the test asserts that it does not grow with the change count, while the full answer does. |
-| `--slim` is only for the badge | Opening the menu asks for the full answer, because the panel needs the change and branch lists. |
-| One full answer per session, reused for 10s | Opening and closing the menu does not append a row per open: a full answer younger than ten seconds is reused, and otherwise the full answer is asked for once. A completed action, an explicit **Check again**, or a target change asks again. |
-| Read-only actions never re-check | `diff` (and `changes`, `status`, `auth`) cannot alter what the probe reports, so they do not trigger a check. Only actions that change the repository do. |
+| `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened stays clean — this is the one switch that removes a row outright. |
+| `status --json --slim` | The mount check asks for the badge's fields only: no change list, no branch list. Measured at **210 bytes** on a 21-file tree, and it does not grow with the change count. |
+| The answer carries pairs, not prose | A change is `[path, code]` and the counts are `[total, staged]`. The words a person reads are built where they are rendered, in the active language, and no field the control never reads is sent at all (`root`, `entries`, `fetchOnStatus`, and a branch's `upstream` were all dead weight). On the same 21-file tree the full answer is **762 bytes** where the old shape was 1953. |
+| **Opening the menu re-reads the panel data** | That is the one moment a person is looking at the list, so a stale list is worse than the row it costs. Only a reopen within 1.2s reuses the answer already in hand, so a double-click does not probe twice. |
+| **Returning to the window refreshes quietly** | Files change while the window is not looking — an editor outside DSH, a build, a `git switch` in a terminal. A `focus` on the window refreshes when the last answer is older than 20s, and announces no failure: a background check must never replace the menu with an error nobody asked for. |
+| Read-only actions mostly do not re-check | `changes`, `status`, and `auth` cannot alter what the probe reports, so they do not trigger one. `diff` does refresh afterwards, because that click is the person asking to see the current state. |
+
+Those two moments are the whole refresh policy. A timer was rejected on purpose:
+it would spend a logged row every time it fired whether or not anything had
+changed. DSH's own `workspaceFiles.changes` stream was considered too, and it
+watches **one directory's direct entries** — an edit inside a subdirectory does
+not notify it — so it would have added a client dependency for partial coverage of
+the case the open-and-focus refreshes already cover exactly.
 
 The preference lives in Host config, which the Client cannot read, so it arrives
-with a check's answer and applies to the sessions created after that. The first
-check of a freshly loaded page is therefore always eager — it is what teaches the
-Client the setting.
+with a check's answer, applies to the sessions created after that, and is
+remembered in the browser's local storage. That last part matters for
+`statusOnMount: false`: without it, every page reload would pay one mount check
+before the first answer taught the Client the setting again — the exact row the
+setting exists to avoid. A browser that refuses storage simply pays that one
+check.
 
 The probe payload carries only what a caller cannot work out for itself: each
-change is a `path` and git's two status letters, and the words a person reads
-(`staged added`, `modified`) are built where they are rendered, in the active
-language. That is also why the control's copy for those words is localized while
-the JSON is not.
+change is a `[path, code]` pair, the counts are `[total, staged]`, and the words a
+person reads (`staged added`, `modified`) are built where they are rendered, in the
+active language. Fields nothing reads are not sent at all. On a 21-file tree that
+is 762 bytes where the earlier shape was 1953, and the mount answer stays at 210
+whatever the tree holds.
 
 ### Keeping the counts honest
 

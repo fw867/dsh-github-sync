@@ -216,31 +216,68 @@ window.__ModuleLoader__.load({
      */
     const probeShape = new Map()
 
-    /** When each session's full answer arrived, so a quick reopen reuses it. */
+    /**
+     * When each session's full answer arrived, so a quick reopen reuses it.
+     *
+     * The window is short on purpose. Opening the menu is the only moment a person
+     * is looking at the change list, so an answer older than this must be replaced
+     * rather than shown: a stale list is worse than the one extra row it costs.
+     */
     const probeFresh = new Map()
 
     /**
-     * Sessions whose full answer has been asked for once.
+     * Sessions with a probe in flight.
      *
-     * Opening and closing a menu must not append a probe row per open, so the
-     * full answer follows the same once-per-session rule as the mount answer;
-     * only a completed action, an explicit retry, or an answer older than
-     * {@link FULL_PROBE_FRESH_MS} asks again.
+     * A probe that never answers writes nothing to either map, so the freshness
+     * windows alone would let a second open start a second probe behind the first.
+     * This is the in-flight gate; the windows are the reuse gate.
      */
-    const probeFullAttempted = new Set()
+    const probeInFlight = new Set()
 
-    /** How long a full answer is reused before the menu asks again. */
-    const FULL_PROBE_FRESH_MS = 10000
+    /** How long a full answer may be reused by a reopen, in milliseconds. */
+    const OPEN_REUSE_MS = 1200
+
+    /** How long a badge answer stays fresh enough to skip a focus refresh. */
+    const FOCUS_REFRESH_MS = 20000
+
+    /** Where the mount-check preference survives a page reload. */
+    const STATUS_ON_MOUNT_KEY = 'dsh-github-sync:status-on-mount'
+
+    /** The remembered preference, or `undefined` when this browser has none. */
+    const storedEager = () => {
+      try {
+        const raw = window.localStorage?.getItem(STATUS_ON_MOUNT_KEY)
+        if (raw === 'true') return true
+        if (raw === 'false') return false
+        return undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    /** Remember the preference for the next page load. */
+    const rememberEager = (value) => {
+      try {
+        window.localStorage?.setItem(STATUS_ON_MOUNT_KEY, value ? 'true' : 'false')
+      } catch {
+        // A browser that refuses storage simply pays the first check again.
+      }
+    }
 
     /**
      * Whether a workspace may be checked as soon as a session appears.
      *
      * This is a deployment-wide Host setting the Client cannot read, so it
      * arrives with a probe's answer and is remembered for every session created
-     * afterwards. `undefined` behaves as the default `true`: the first check of
-     * a fresh client is what teaches it the setting.
+     * afterwards. `undefined` behaves as the default `true`: the first check of a
+     * fresh client is what teaches it the setting.
+     *
+     * It is remembered in the browser as well, because a reload would otherwise
+     * pay one mount check before the first answer teaches it the setting again —
+     * and that check is precisely the row a deployment turning the mount check
+     * off is trying to avoid.
      */
-    let eagerAllowed = true
+    let eagerAllowed = storedEager() ?? true
 
     /**
      * Which workspace subdirectory each session's actions point at.
@@ -327,7 +364,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r20'
+    const BUILD = 'r23'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -733,6 +770,8 @@ window.__ModuleLoader__.load({
       const refresh = async (targetSession, announceFailure, options) => {
         const address = targetSession ?? sessionId
         if (address === undefined) return
+        if (probeInFlight.has(address)) return
+        probeInFlight.add(address)
         const controller = new AbortController()
         const expired = new Promise((resolve) => {
           controller.signal.addEventListener('abort', () => resolve(PROBE_TIMEOUT), { once: true })
@@ -757,6 +796,7 @@ window.__ModuleLoader__.load({
           }
         } finally {
           clearTimeout(timer)
+          probeInFlight.delete(address)
         }
       }
 
@@ -814,9 +854,10 @@ window.__ModuleLoader__.load({
           probeShape.set(address, slim ? 'slim' : 'full')
           if (slim !== true) probeFresh.set(address, Date.now())
           // The answer carries the deployment's eager-check preference; remember
-          // it so sessions created later follow it.
+          // it for the sessions created afterwards, and for the next page load.
           if (typeof parsed?.statusOnMount === 'boolean') {
             eagerAllowed = parsed.statusOnMount
+            rememberEager(parsed.statusOnMount)
           }
           setProbeError(null)
         } catch {
@@ -877,15 +918,15 @@ window.__ModuleLoader__.load({
       }, [sessionId])
 
       // Opening the menu is what needs the panel's data: the change list and the
-      // branch list. A slim answer from the mount probe does not have them, and a
-      // fresh full answer is reused rather than paid for again — otherwise every
-      // open and close would append another probe row to the conversation.
+      // branch list. That is also the one moment a person is looking at them, so
+      // the answer is read again on open — a slim answer never has the lists, and
+      // a full one older than OPEN_REUSE_MS is replaced rather than shown stale.
+      // Only a reopen within that window reuses: closing and reopening the menu in
+      // one breath must not append two probe rows.
       React.useEffect(() => {
         if (!open || sessionId === undefined) return undefined
         const shape = probeShape.get(sessionId)
-        if (shape === 'full' && Date.now() - (probeFresh.get(sessionId) ?? 0) < FULL_PROBE_FRESH_MS) return undefined
-        if (probeFullAttempted.has(sessionId)) return undefined
-        probeFullAttempted.add(sessionId)
+        if (shape === 'full' && Date.now() - (probeFresh.get(sessionId) ?? 0) < OPEN_REUSE_MS) return undefined
         let cancelled = false
         const probeOnOpen = async () => {
           try {
@@ -903,6 +944,25 @@ window.__ModuleLoader__.load({
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [open, sessionId])
+
+      // Files change while the window is not looking — an editor outside DSH, a
+      // build, a `git switch` in a terminal. Coming back to the window is the
+      // signal for that, and it is the only background refresh this control makes:
+      // a timer would spend a logged command row every time it fired whether or
+      // not anything had changed, and the answer's whole purpose is to be read
+      // when someone is looking. The refresh is quiet — a failure here must not
+      // replace the menu with an error the person did not ask for.
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined
+        const onFocus = () => {
+          if (probeShape.get(sessionId) === undefined) return
+          if (Date.now() - (probeFresh.get(sessionId) ?? 0) < FOCUS_REFRESH_MS) return
+          void refresh(sessionId, false)
+        }
+        window.addEventListener('focus', onFocus)
+        return () => window.removeEventListener('focus', onFocus)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [sessionId])
 
       // Dismiss the menu on the interactions that mean "I am done here": Escape,
       // a press anywhere outside the control, focus moving out of it, or the
@@ -981,17 +1041,20 @@ window.__ModuleLoader__.load({
       // default is an empty set that means everything — and the command stays a
       // plain `/github commit`, however many files changed.
       //
+      // A change arrives as `[path, code]` — the probe is answered in a logged
+      // command row, so it carries pairs rather than objects with named fields.
+      //
       // A path containing a double quote cannot be written on the `/github`
       // line at all; it is listed, marked, and simply left out of a narrowed
       // selection rather than being silently mis-quoted.
       const changed = Array.isArray(probe?.changes) ? probe.changes : []
-      const counts = probe?.counts
-      const named = changed.filter((entry) => typeof entry?.path === 'string' && entry.path.length > 0)
-      const selectable = named.filter((entry) => !entry.path.includes('"'))
-      const selected = selectable.filter((entry) => !excluded.has(entry.path))
+      const counts = Array.isArray(probe?.counts) ? probe.counts : undefined
+      const named = changed.filter((entry) => Array.isArray(entry) && typeof entry[0] === 'string' && entry[0].length > 0)
+      const selectable = named.filter((entry) => !entry[0].includes('"'))
+      const selected = selectable.filter((entry) => !excluded.has(entry[0]))
       const narrowing = excluded.size > 0
       const nothingSelected = narrowing && selected.length === 0
-      const fileSuffix = narrowing ? selected.map((entry) => ` --file "${entry.path}"`).join('') : ''
+      const fileSuffix = narrowing ? selected.map((entry) => ` --file "${entry[0]}"`).join('') : ''
 
       /** Tick or untick one path for the next commit. */
       const togglePath = (path) => {
@@ -1010,8 +1073,8 @@ window.__ModuleLoader__.load({
               React.createElement(
                 'div',
                 { key: 'changes-label', style: S.hint },
-                typeof counts?.total === 'number' && typeof counts?.staged === 'number'
-                  ? `${t('changes.title')} — ${t('changes.summary', { total: counts.total, staged: counts.staged })}`
+                typeof counts?.[0] === 'number' && typeof counts?.[1] === 'number'
+                  ? `${t('changes.title')} — ${t('changes.summary', { total: counts[0], staged: counts[1] })}`
                   : t('changes.title'),
               ),
               React.createElement(
@@ -1026,18 +1089,18 @@ window.__ModuleLoader__.load({
               ...selectable.map((entry) =>
                 React.createElement(
                   'div',
-                  { key: `change-${entry.path}`, style: S.changeRow },
+                  { key: `change-${entry[0]}`, style: S.changeRow },
                   React.createElement('input', {
                     type: 'checkbox',
-                    checked: !excluded.has(entry.path),
+                    checked: !excluded.has(entry[0]),
                     disabled,
-                    'aria-label': t('changes.include', { path: entry.path }),
-                    onChange: () => togglePath(entry.path),
+                    'aria-label': t('changes.include', { path: entry[0] }),
+                    onChange: () => togglePath(entry[0]),
                   }),
                   React.createElement(
                     'span',
-                    { style: S.changePath, title: `${entry.path} — ${changeWords(entry.code, t)}` },
-                    entry.path,
+                    { style: S.changePath, title: `${entry[0]} — ${changeWords(entry[1], t)}` },
+                    entry[0],
                   ),
                   React.createElement(
                     'button',
@@ -1045,9 +1108,9 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       disabled,
                       style: style(S.changeAction, disabled ? S.itemDisabled : undefined),
-                      title: t('changes.diffLabel', { path: entry.path }),
+                      title: t('changes.diffLabel', { path: entry[0] }),
                       onClick: () => {
-                        void run(`/github diff --file "${entry.path}"${dirSuffix(sessionId)}`).then(() => refresh())
+                        void run(`/github diff --file "${entry[0]}"${dirSuffix(sessionId)}`).then(() => refresh())
                       },
                     },
                     t('changes.diff'),
@@ -1375,9 +1438,8 @@ window.__ModuleLoader__.load({
                       style: style(S.item, disabled ? S.itemDisabled : undefined),
                       onClick: () => {
                         // An explicit retry is a new attempt, so it clears the
-                        // once-per-session gates as well as the recorded failure.
+                        // recorded failure and the freshness window with it.
                         probeAttempted.delete(sessionId)
-                        probeFullAttempted.delete(sessionId)
                         probeFresh.delete(sessionId)
                         setProbeError(null)
                         void refresh(sessionId, true)
