@@ -87,7 +87,8 @@ window.__ModuleLoader__.load({
       'commit.otherPlaceholder': 'comma separated, e.g. hotfix, deploy',
       'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
       'commit.step': '{action} · {count} path(s) will be recorded',
-      'commit.confirm': 'Record it',
+      'commit.confirm': 'Record commit',
+      'commit.confirmPush': 'Confirm & push',
       'commit.cancel': 'Cancel',
       'change.modified': 'modified',
       'change.added': 'added',
@@ -177,7 +178,8 @@ window.__ModuleLoader__.load({
       'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
       'commit.step': '{action} · 将记录 {count} 个路径',
-      'commit.confirm': '确认记录',
+      'commit.confirm': '确认提交',
+      'commit.confirmPush': '确认推送',
       'commit.cancel': '取消',
       'change.modified': '已修改',
       'change.added': '新增',
@@ -411,7 +413,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r27'
+    const BUILD = 'r28'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -598,13 +600,21 @@ window.__ModuleLoader__.load({
         fontWeight: 600,
       },
       /** The one chip that carries the step through: the commit itself. */
-      chipPrimary: {
-        borderColor: 'var(--dsw-alias-brand-primary)',
-        color: 'var(--dsw-alias-brand-primary)',
-        background: 'transparent',
+      chipConfirm: {
+        flex: '0 0 auto',
+        padding: '4px 12px',
+        border: 0,
+        borderRadius: 999,
+        // The product's own blue. The theme's `button-primary-fill` alias is a
+        // neutral here (near-white in the dark theme), so the palette blue is what
+        // makes the one control that carries the action unmistakable.
+        background: 'var(--dsw-static-blue-500)',
+        color: '#ffffff',
+        fontSize: 11,
+        lineHeight: '16px',
         fontWeight: 600,
+        cursor: 'pointer',
       },
-      chipDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
       customMessage: {
         margin: '2px 8px 4px',
         minHeight: 46,
@@ -1622,7 +1632,10 @@ window.__ModuleLoader__.load({
                     type: 'button',
                     disabled: disabled || needCustom,
                     title: needCustom ? t('commit.needCustom') : undefined,
-                    style: style(S.chip, disabled || needCustom ? S.chipDisabled : S.chipPrimary),
+                    style: style(
+                      S.chipConfirm,
+                      disabled || needCustom ? { opacity: 0.4, cursor: 'default' } : undefined,
+                    ),
                     onClick: () => {
                       const action = pendingAction
                       setPendingAction(null)
@@ -1634,7 +1647,9 @@ window.__ModuleLoader__.load({
                       )
                     },
                   },
-                  t('commit.confirm'),
+                  // The click says what it will do: publishing is not the same act as
+                  // recording, and the button is the last thing read before either.
+                  t(pendingAction === 'sync' ? 'commit.confirmPush' : 'commit.confirm'),
                 ),
                 React.createElement(
                   'button',

@@ -119,22 +119,25 @@ elsewhere is covering the thing the person just clicked.
 
 ### Choosing the message, and the markers CI reads
 
-Every commit-shaped action in the menu — **Commit locally** and **Commit & push** —
-**asks before it records**. Clicking one opens a step under the buttons:
+Every commit-shaped action in the menu — **Commit & push** for a repository with a
+remote, **Commit locally** for one without — **asks before it records**. Clicking
+one opens a step under the buttons:
 
 ```
 Commit & push · 3 path(s) will be recorded
 Commit message   [AI generated] [Write my own]
 CI markers       [skip ci] [release] [others…]
-                 [Record it] [Cancel]
+                 [Confirm & push] [Cancel]
 ```
 
 The message and the markers belong to that decision, so they appear when the
 decision is being made instead of sitting in the panel the whole time — a panel
 that always shows a form for something nobody asked for reads as if it were already
 doing it. The step names the action and counts what will be recorded, the action's
-own button stays highlighted while it waits, and `Record it` is the click that runs
-the command. Everything that backs out works the way a person expects: **Cancel**,
+own button stays highlighted while it waits, and the blue button is the click that
+runs the command. Its word follows the action it will run: **Confirm & push** when
+the command publishes, **Record commit** for a local commit, where "push" would be
+a lie. Everything that backs out works the way a person expects: **Cancel**,
 clicking the action again, `Escape` (which leaves the step first and closes the menu
 only on a second press), and closing the menu — an unconfirmed step never survives
 to the next open.
