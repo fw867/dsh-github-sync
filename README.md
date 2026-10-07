@@ -102,12 +102,88 @@ The menu offers:
 The state is read when a session first appears, so switching to another workspace
 immediately shows that workspace's sync state rather than the previous one's.
 
+**The menu keeps its own size.** It opens upward from a button near the bottom of
+the window, so it is bounded by the viewport (`min(72vh, 100vh - 96px)`) and
+scrolls inside that bound; the action result inside it has a smaller ceiling of
+its own. Without that, a long diff or a long log pushed the top of the menu off
+the screen and the remainder could not be reached. The result also belongs to the
+interaction that produced it: **closing the menu clears it**, so reopening shows
+the panel rather than the previous visit's output.
+
 **The menu dismisses itself when it should.** Escape, a press anywhere outside the
 control, keyboard focus moving out of it, and the window losing focus all close
 it; the listeners are registered only while it is open, and released when it
 closes. A press inside the control — its own button or any of its items — does
 not, because that press *is* the interaction. A popup that survives a click
 elsewhere is covering the thing the person just clicked.
+
+### Choosing the message, and the markers CI reads
+
+Every commit-shaped action in the menu — **Commit locally**, **Commit & push**,
+and the **Connect & push** row — takes two choices that ride it:
+
+| Choice | What it does |
+|---|---|
+| **AI generated** (default) | The message is generated from the staged changes, as described under [Commit messages](#commit-messages). |
+| **Write my own** | A field for the message: the first line is the subject, later lines become the body. The commit buttons are disabled while it is empty, with the reason. A `"` is written as `'`, because the message travels on the `/github` line and that line is parsed by quoting. |
+| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). |
+
+A marker is recorded as a **bracketed paragraph at the end of the message**, never
+in the subject: the subject is capped at 72 characters and every CI system reads
+the whole message, so `feat(ui): keep the menu inside the viewport` stays readable
+while the pipeline still sees `[skip ci]`. The engine cleans what it is given —
+brackets are optional (`[skip ci]` and `skip ci` are the same request), whitespace
+is collapsed, at most five markers survive, and anything that is not plain words
+is dropped rather than committed.
+
+On the other two surfaces the same two things are parameters:
+
+```
+/github commit --message "feat(ui): keep the menu inside the viewport" --marker "skip ci"
+/github sync --marker release --marker "skip ci"
+/github init https://github.com/me/repo.git --marker hotfix
+```
+
+`github_sync` takes `message` and `markers` the same way.
+
+### The same panel in the right sidebar
+
+The composer button is a popup because a popup is the right shape for two clicks in
+the middle of writing a message. It is the wrong shape for reading: it opens upward
+from a button near the bottom of the window, so it is bounded, it scrolls, and its
+height competes with everything else on screen.
+
+So the menu carries **Open in the sidebar**, which opens a `github-sync` tab in
+DSH's right sidebar — the dock that Files, Terminal, and the browser already live
+in. There the panel is a column: full height, no dismissal, its own **Refresh**, and
+room for a diff or a log to be read rather than scrolled through a letterbox.
+
+It is **the same control**, not a second implementation: one component, two
+containers. `surface: 'menu'` renders the button and the popup; `surface: 'pane'`
+renders the panel as a column of the page. The probe, the change list, the message
+options, the CI markers, the branch list, and the actions are one body of code, so a
+rule added for one surface is present in the other by construction. What differs is
+only what a popup needs and a pane does not: dismissal listeners, the height bound,
+clearing the last result when it closes (a pane stays open, so its result stays
+until the next action), and the sidebar item itself — a pane that offered to open a
+pane would be nonsense.
+
+The tab is registered the way DSH's own sidebar features register theirs:
+
+| Piece | What it is |
+|---|---|
+| `ctx.get('sidebarRight')`, `ctx.get('sidebarRightTabs')` | The dock's two services, looked up through `ctx.get` and **never** read as properties. Cordis answers a read of an undeclared service with `cannot get property "sidebarRight" without inject`, and a plugin that throws while activating takes its fiber down with it — which is how an optional extra stops the client from booting. `ctx.get` returns `undefined` instead, and then there is simply no tab to add. |
+| `ctx.sidebarRightTabs.register({ id, kind, priority: 'extension', title })` | The tab type. `id` is the implementation's identity — the package name — and is also the key the body and chip are registered under. A `kind` carries at most one `extension` beside the builtin one. |
+| `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id, locale, inject }, Body)` | The pane body. It receives the session's standard props, which is how it knows which workspace to check. |
+| `ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, Chip)` | The tab chip. |
+| `ctx.sidebarRight.openTab(kind)` | How the menu gets there — the dock's own controller, and the reason the panel expands when it opens. |
+
+The whole registration is wrapped, and the menu item is offered only **after** the
+tab registered: opening a kind nobody registered is an error on the dock's side, and
+an item that can only fail is worse than no item. A refused registration costs one
+menu entry and a warning, never the boot. Four states are asserted — a dock that is
+present, one that is absent, one that refuses, and a context that throws on any read
+of an undeclared service.
 
 ### Why a check leaves a row, and how to stop it
 
@@ -338,10 +414,33 @@ text with no locale service available to them, so they stay English.
 a default, so the plugin also answers *what* is about to be committed and lets a
 caller narrow it.
 
+### The list is the commit's contract
+
+The change list shows **changes to files git already has**: a modification, a
+deletion, a rename, a conflict. It does not show:
+
+| Not listed | Why, and what happens to it |
+|---|---|
+| A file git does not track yet (`??`) | It is not in the repository, so "what changed" is not the question it answers. It is **not committed** either: the button stages with `git add --update`, so a commit records exactly what the list showed. `git add` the file (or the **stage** action) and it becomes an ordinary tracked change the button records. |
+| A path `.gitignore` matches | Even when git still reports it — a file that was committed *before* the pattern was added is in the index, and git keeps showing its modifications because a commit would include it. Here `.gitignore` is the last word: it is neither listed nor recorded, via a pathspec exclusion. |
+| Anything already ignored and untracked | Git never reports these without `--ignored`, and the plugin never asks for them. |
+
+What the list leaves out is still **disclosed as a count** (`{count} change(s) are
+not listed: …`), because a repository whose only change is a new file must not look
+untouched: the badge stays dirty and the menu says why the list is empty.
+
+`changesScope: 'all'` restores git's own view — untracked files are listed and
+committed by `git add -A`, and a tracked path matched by a pattern is ordinary.
+The strict scope is the default. Both are checked against a real repository: an
+ignored file never appears in either, a rename stays one entry carrying its
+original path, and a commit records the listed paths and nothing else — including
+the case of a new file that is added with `git add` first, which then commits like
+any other tracked change.
+
 The workspace check reports the change list along with the branch, so the menu
 needs no second command to draw it. Each path carries its git status code and a
-plain description of it (`staged added`, `modified, not staged`, `untracked`),
-and the menu shows them with a checkbox and a **Diff** button:
+plain description of it (`staged added`, `modified, not staged`), and the menu
+shows them with a checkbox and a **Diff** button:
 
 - **Ticked is the default.** Unticking a path narrows the next
   **Commit locally** / **Commit & push**, whose label counts what will go in.
@@ -512,6 +611,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     auth: auto                # auto: ssh, then token, then the system helper
     fetchOnStatus: false      # fetch before reporting ahead/behind counts
     statusOnMount: true       # check when a session appears, or only when opened
+    changesScope: tracked     # tracked: only changes to files git already has
     subdirectory: ''          # repository below the workspace root, when there is one
     timeoutMs: 600000
 ```
@@ -523,11 +623,12 @@ metadata cannot leak it. See [Authentication](#authentication) for the order it
 competes in and for what the machine may already offer.
 
 A wrong-typed or unknown field fails activation with a clear message rather than
-silently changing behaviour mid-push.
+silently changing behaviour mid-push — including an enumeration such as
+`changesScope`, which accepts only `tracked` or `all`.
 
 ## Commit messages
 
-`commit` and `sync` stage every change, then produce a
+`commit` and `sync` stage what the change list showed, then produce a
 [Conventional Commits](https://www.conventionalcommits.org/) **message** — a
 subject line and a short body — in the language the workspace runs in:
 
@@ -610,6 +711,7 @@ reasoning-only answer is distinguishable from a provider that failed.
 | `url` | For `init`/`setup`: the remote to record and push to. |
 | `remote` | Remote name; defaults to the plugin config. |
 | `message` | Commit subject used verbatim instead of generating one. |
+| `markers` | CI markers, each bracketed on its own line at the end of the message: `["skip ci"]` writes `[skip ci]`, `["release", "skip ci"]` writes both. Plain words only, at most five, brackets optional. For `commit`, `sync`, and `amend`. |
 | `pull` | For `sync`, pull with rebase before pushing. A failed pull stops the sync before the push. |
 | `allowEmpty` | Allow a commit when nothing changed. |
 

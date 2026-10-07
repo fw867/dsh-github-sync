@@ -19,6 +19,17 @@ window.__ModuleLoader__.load({
     /** Namespace for this control's copy, registered with the Client locale service. */
     const LOCALE_NAMESPACE = 'github-sync'
 
+    /**
+     * The right sidebar tab this plugin adds.
+     *
+     * `id` is the implementation's identity in the tab system — it is unique
+     * across every registration, and it is also the key the pane body and its chip
+     * title are registered under. `kind` is the page type the navigation
+     * controller opens. The package name is the natural `id`.
+     */
+    const SIDEBAR_ID = 'dsh-github-sync'
+    const SIDEBAR_KIND = 'github-sync'
+
     /** English copy; the locale service always falls back here. */
     const EN = {
       'title': 'GitHub sync',
@@ -33,6 +44,9 @@ window.__ModuleLoader__.load({
       'action.init': 'Create an empty repository here',
       'action.setup': 'Connect & push',
       'action.retry': 'Check again',
+      'action.refresh': 'Refresh',
+      'sidebar.open': 'Open in the sidebar',
+      'sidebar.title': 'GitHub',
       'menu.checking': 'Checking this workspace…',
       'menu.found': 'Repository detected.',
       'menu.empty.hint': 'This workspace has no repository yet. Clone one, or create a new one here.',
@@ -60,6 +74,18 @@ window.__ModuleLoader__.load({
       'changes.all': 'all {total} selected',
       'changes.include': 'Include {path} in the next commit',
       'changes.unrepresentable': 'A path containing a double quote cannot be named on the /github line; commit it from the tool or a terminal.',
+      'changes.hidden': '{count} change(s) are not listed: a file git does not track yet, or a path .gitignore excludes. `git add` the file if it belongs in the next commit.',
+      'changes.clean': 'Nothing tracked has changed.',
+      'commit.options': 'Commit message',
+      'commit.mode.ai': 'AI generated',
+      'commit.mode.custom': 'Write my own',
+      'commit.customPlaceholder': 'First line is the subject; later lines become the body',
+      'commit.customNote': 'A double quote is written as a single quote, because the message travels on the /github line.',
+      'commit.markers': 'CI markers',
+      'commit.markerHint': 'Recorded as a bracketed line at the end of the message, so the subject stays readable.',
+      'commit.otherMarkers': 'Others',
+      'commit.otherPlaceholder': 'comma separated, e.g. hotfix, deploy',
+      'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
       'change.modified': 'modified',
       'change.added': 'added',
       'change.deleted': 'deleted',
@@ -105,6 +131,9 @@ window.__ModuleLoader__.load({
       'action.init': '在此新建仓库',
       'action.setup': '连接并推送',
       'action.retry': '重新检查',
+      'action.refresh': '刷新',
+      'sidebar.open': '在侧栏打开',
+      'sidebar.title': 'GitHub',
       'menu.checking': '正在检查当前工作区…',
       'menu.found': '已检测到 Git 仓库。',
       'menu.empty.hint': '当前工作区还没有 Git 仓库。可以克隆一个，或在这里新建。',
@@ -132,6 +161,18 @@ window.__ModuleLoader__.load({
       'changes.all': '已全选 {total} 项',
       'changes.include': '把 {path} 纳入下次提交',
       'changes.unrepresentable': '路径里含双引号，无法写在 /github 命令行上；请用工具或终端提交它。',
+      'changes.hidden': '另有 {count} 个改动未列出：尚未被 git 跟踪的文件，或已被 .gitignore 排除的路径。要让它进入本次提交，请先 `git add` 它。',
+      'changes.clean': '已跟踪的文件没有改动。',
+      'commit.options': '提交信息',
+      'commit.mode.ai': 'AI 生成',
+      'commit.mode.custom': '自定义',
+      'commit.customPlaceholder': '首行是标题，后续行会成为正文',
+      'commit.customNote': '双引号会被写成单引号 —— 消息要经由 /github 命令行传递。',
+      'commit.markers': 'CI 标识',
+      'commit.markerHint': '会作为带方括号的一行附在消息末尾，标题保持简短可读。',
+      'commit.otherMarkers': '其它',
+      'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
+      'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
       'change.modified': '已修改',
       'change.added': '新增',
       'change.deleted': '已删除',
@@ -364,7 +405,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r23'
+    const BUILD = 'r26'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -394,6 +435,14 @@ window.__ModuleLoader__.load({
         zIndex: 30,
         width: 'min(560px, calc(100vw - 24px))',
         minWidth: 320,
+        // The menu grows upward from a button near the bottom of the window, so it
+        // has to be bounded by the viewport and scroll inside that bound. Without
+        // this a long diff or a long action result pushed the top of the menu off
+        // the screen, and the part that was left could not be scrolled to.
+        maxHeight: 'min(72vh, calc(100vh - 96px))',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        overscrollBehavior: 'contain',
         boxSizing: 'border-box',
         padding: 6,
         display: 'flex',
@@ -504,12 +553,11 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       output: {
-        // Logs and diffs are wide and long. A 168px window cut both off, so the
-        // panel grows with the answer, keeps a tall ceiling, and wraps instead of
-        // relying on horizontal scrolling — a wrapped line is readable where a
-        // clipped one is simply missing.
-        maxHeight: 'min(52vh, 460px)',
-        minHeight: 60,
+        // Logs and diffs are wide and long. The menu itself scrolls and is bounded
+        // by the viewport, so this panel keeps a smaller ceiling of its own: it
+        // shows the answer without pushing everything else out of reach.
+        maxHeight: 'min(38vh, 300px)',
+        minHeight: 54,
         boxSizing: 'border-box',
         margin: '4px 0 0',
         padding: '6px 8px',
@@ -524,6 +572,64 @@ window.__ModuleLoader__.load({
         overflowWrap: 'anywhere',
       },
       outputError: { color: 'var(--dsw-alias-state-error-primary)' },
+      chips: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, padding: '2px 8px' },
+      chip: {
+        flex: '0 0 auto',
+        padding: '3px 8px',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 999,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 11,
+        lineHeight: '16px',
+        cursor: 'pointer',
+      },
+      chipOn: {
+        borderColor: 'var(--dsw-alias-brand-primary)',
+        color: 'var(--dsw-alias-brand-primary)',
+        fontWeight: 600,
+      },
+      customMessage: {
+        margin: '2px 8px 4px',
+        minHeight: 46,
+        padding: '6px 8px',
+        boxSizing: 'border-box',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 6,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'inherit',
+        fontSize: 12,
+        lineHeight: '17px',
+        resize: 'vertical',
+      },
+      markerInput: {
+        flex: '1 1 120px',
+        minWidth: 100,
+        padding: '3px 8px',
+        boxSizing: 'border-box',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 6,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      // The sidebar pane is a column of the page rather than a popup: it takes the
+      // height it is given and scrolls, so a long diff or log has room that the
+      // menu — bounded by a button near the bottom of the window — cannot have.
+      pane: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        boxSizing: 'border-box',
+        height: '100%',
+        padding: 8,
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        color: 'var(--dsw-alias-label-primary)',
+        fontSize: 13,
+      },
     }
 
     /** Merge the base control style with a conditional override. */
@@ -661,12 +767,21 @@ window.__ModuleLoader__.load({
       const sessionId = props.sessionId
       const remote = props.remote
       const t = props.t ?? ((key) => key)
+      // Two surfaces, one control. The composer button shows a popup menu; the
+      // right sidebar shows a pane. Both render the same panel — the same probe,
+      // the same change list, the same actions — so a rule added for one is
+      // present in the other by construction, and only the container differs.
+      const surface = props.surface === 'pane' ? 'pane' : 'menu'
+      const openSidebar = typeof props.openSidebar === 'function' ? props.openSidebar : null
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
       // this disables the menu. The background workspace check must never take
       // the controls away, however it ends.
       const [actionBusy, setActionBusy] = React.useState(null)
+      // The result of the last action is shown while the menu is open and cleared
+      // when it closes: a stale answer from the previous interaction must not be
+      // what the next open displays, and it must not decide the menu's height.
       const [output, setOutput] = React.useState(null)
       const [failed, setFailed] = React.useState(false)
       const [url, setUrl] = React.useState('')
@@ -676,6 +791,13 @@ window.__ModuleLoader__.load({
       // probe refresh that adds files.
       const [excluded, setExcluded] = React.useState(() => new Set())
       const [branchName, setBranchName] = React.useState('')
+      // The message the next commit records, and the markers a pipeline looks for.
+      // The default is the generated message with no markers, so the ordinary
+      // commit stays one click.
+      const [writeOwnMessage, setWriteOwnMessage] = React.useState(false)
+      const [customMessage, setCustomMessage] = React.useState('')
+      const [presetMarkers, setPresetMarkers] = React.useState(() => new Set())
+      const [otherMarkers, setOtherMarkers] = React.useState('')
 
       // A ref mirrors the latest Remote namespace so the probe effect below can
       // depend on the session and the open state alone, without re-firing when
@@ -917,14 +1039,14 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sessionId])
 
-      // Opening the menu is what needs the panel's data: the change list and the
-      // branch list. That is also the one moment a person is looking at them, so
-      // the answer is read again on open — a slim answer never has the lists, and
+      // The panel's data is read when the panel is being looked at: the menu
+      // opened, or the sidebar pane mounted. A slim answer never has the lists, and
       // a full one older than OPEN_REUSE_MS is replaced rather than shown stale.
-      // Only a reopen within that window reuses: closing and reopening the menu in
-      // one breath must not append two probe rows.
+      // Only a second look within that window reuses: closing and reopening the
+      // menu in one breath must not append two probe rows.
+      const wantsData = open || surface === 'pane'
       React.useEffect(() => {
-        if (!open || sessionId === undefined) return undefined
+        if (!wantsData || sessionId === undefined) return undefined
         const shape = probeShape.get(sessionId)
         if (shape === 'full' && Date.now() - (probeFresh.get(sessionId) ?? 0) < OPEN_REUSE_MS) return undefined
         let cancelled = false
@@ -943,7 +1065,7 @@ window.__ModuleLoader__.load({
           cancelled = true
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [open, sessionId])
+      }, [wantsData, sessionId])
 
       // Files change while the window is not looking — an editor outside DSH, a
       // build, a `git switch` in a terminal. Coming back to the window is the
@@ -963,6 +1085,16 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('focus', onFocus)
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sessionId])
+
+      // The action result belongs to the interaction that produced it. Closing the
+      // menu clears it, so the next open starts from the same place every time
+      // instead of showing what the previous visit printed. The sidebar pane is
+      // not a visit — it stays open — so its result stays until the next action.
+      React.useEffect(() => {
+        if (surface === 'pane' || open) return
+        setOutput(null)
+        setFailed(false)
+      }, [open, surface])
 
       // Dismiss the menu on the interactions that mean "I am done here": Escape,
       // a press anywhere outside the control, focus moving out of it, or the
@@ -1066,10 +1198,127 @@ window.__ModuleLoader__.load({
         })
       }
 
+      // What the next commit records besides the paths: a written message when
+      // one is asked for, and the CI markers. A double quote becomes a single one
+      // because the message travels on the `/github` line, which is parsed by
+      // quoting; the menu says so rather than silently dropping the character.
+      const markers = [...presetMarkers, ...otherMarkers.split(',')]
+        .map((marker) => marker.trim())
+        .filter((marker) => marker.length > 0)
+      const messageText = customMessage.replace(/"/g, "'").trim()
+      const needCustom = writeOwnMessage && messageText.length === 0
+      const commitSuffix = `${writeOwnMessage && !needCustom ? ` --message "${messageText}"` : ''}${markers
+        .map((marker) => ` --marker "${marker}"`)
+        .join('')}`
+
+      // The list is the button's contract: what it leaves out is still reported, so
+      // a repository whose only change is a file git does not track yet never looks
+      // untouched — and the person can see that a `git add` is what would include
+      // it in the next commit.
+      const hiddenNote =
+        typeof probe?.hidden === 'number' && probe.hidden > 0
+          ? React.createElement(
+              'div',
+              { key: 'changes-hidden', style: S.hint },
+              t('changes.hidden', { count: probe.hidden }),
+            )
+          : null
+
+      /** Tick or untick one preset marker. */
+      const toggleMarker = (marker) => {
+        setPresetMarkers((current) => {
+          const next = new Set(current)
+          if (next.has(marker)) next.delete(marker)
+          else next.add(marker)
+          return next
+        })
+      }
+
+      const markerChips = (presets) =>
+        presets.map((marker) =>
+          React.createElement(
+            'button',
+            {
+              key: `marker-${marker}`,
+              type: 'button',
+              role: 'menuitemcheckbox',
+              'aria-checked': presetMarkers.has(marker),
+              disabled,
+              style: style(S.chip, presetMarkers.has(marker) ? S.chipOn : undefined),
+              onClick: () => toggleMarker(marker),
+            },
+            `[${marker}]`,
+          ),
+        )
+
+      const commitOptions = [
+        React.createElement('div', { key: 'commit-label', style: S.hint }, t('commit.options')),
+        React.createElement(
+          'div',
+          { key: 'commit-mode', style: S.chips },
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              role: 'menuitemradio',
+              'aria-checked': writeOwnMessage !== true,
+              disabled,
+              style: style(S.chip, writeOwnMessage !== true ? S.chipOn : undefined),
+              onClick: () => setWriteOwnMessage(false),
+            },
+            t('commit.mode.ai'),
+          ),
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              role: 'menuitemradio',
+              'aria-checked': writeOwnMessage === true,
+              disabled,
+              style: style(S.chip, writeOwnMessage === true ? S.chipOn : undefined),
+              onClick: () => setWriteOwnMessage(true),
+            },
+            t('commit.mode.custom'),
+          ),
+        ),
+        ...(writeOwnMessage
+          ? [
+              React.createElement('textarea', {
+                key: 'commit-message',
+                style: S.customMessage,
+                value: customMessage,
+                rows: 2,
+                spellCheck: false,
+                placeholder: t('commit.customPlaceholder'),
+                'aria-label': t('commit.options'),
+                disabled,
+                onChange: (event) => setCustomMessage(event.target.value),
+              }),
+              React.createElement('div', { key: 'commit-note', style: S.hint }, t('commit.customNote')),
+            ]
+          : []),
+        React.createElement('div', { key: 'commit-markers-label', style: S.hint }, t('commit.markers')),
+        React.createElement(
+          'div',
+          { key: 'commit-markers', style: S.chips },
+          ...markerChips(['skip ci', 'release']),
+          React.createElement('input', {
+            key: 'other-markers',
+            style: S.markerInput,
+            value: otherMarkers,
+            spellCheck: false,
+            placeholder: t('commit.otherPlaceholder'),
+            'aria-label': t('commit.otherMarkers'),
+            disabled,
+            onChange: (event) => setOtherMarkers(event.target.value),
+          }),
+        ),
+        React.createElement('div', { key: 'commit-marker-hint', style: S.hint }, t('commit.markerHint')),
+      ]
+
       const changesPanel =
         named.length === 0
-          ? null
-          : [
+          ? null          : [
               React.createElement(
                 'div',
                 { key: 'changes-label', style: S.hint },
@@ -1252,7 +1501,10 @@ window.__ModuleLoader__.load({
       /** Run one URL-bearing action and clear the field afterwards. */
       const submitUrl = (command) => {
         if (url.trim().length === 0) return
-        void run(`${command} ${url.trim()}${dirSuffix(sessionId)}`).then(() => {
+        // `init <url>` and `setup <url>` commit and push as well, so they carry
+        // the same message and markers the commit actions do.
+        const extra = command.endsWith('/github init') ? `${commitSuffix}` : ''
+        void run(`${command} ${url.trim()}${dirSuffix(sessionId)}${extra}`).then(() => {
           setUrl('')
           void refresh()
         })
@@ -1277,8 +1529,9 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              disabled: disabled || url.trim().length === 0,
-              style: style(S.action, disabled || url.trim().length === 0 ? S.itemDisabled : undefined),
+              disabled: disabled || url.trim().length === 0 || needCustom,
+              title: needCustom ? t('commit.needCustom') : undefined,
+              style: style(S.action, disabled || url.trim().length === 0 || needCustom ? S.itemDisabled : undefined),
               onClick: () => submitUrl(command),
             },
             label,
@@ -1290,7 +1543,7 @@ window.__ModuleLoader__.load({
         // label says how many paths will go in, so the effect of unticking is
         // visible before the click.
         const commitLike = action.id === 'commit' || action.id === 'sync'
-        const blocked = commitLike && nothingSelected
+        const blocked = commitLike && (nothingSelected || needCustom)
         const label = commitLike && narrowing ? `${t(action.key)} · ${selected.length}` : t(action.key)
         return React.createElement(
           'button',
@@ -1299,10 +1552,12 @@ window.__ModuleLoader__.load({
             type: 'button',
             role: 'menuitem',
             disabled: disabled || blocked,
-            title: blocked ? t('changes.noneSelected') : undefined,
+            title: blocked ? (needCustom ? t('commit.needCustom') : t('changes.noneSelected')) : undefined,
             style: style(S.item, disabled || blocked ? S.itemDisabled : undefined),
             onClick: () => {
-              void run(`/github ${action.id}${dirSuffix(sessionId)}${commitLike ? fileSuffix : ''}`).then(() => {
+              void run(
+                `/github ${action.id}${dirSuffix(sessionId)}${commitLike ? `${fileSuffix}${commitSuffix}` : ''}`,
+              ).then(() => {
                 // A recorded selection belongs to the commit that used it: the
                 // next change to the same path starts included again.
                 if (commitLike) setExcluded(new Set())
@@ -1367,6 +1622,126 @@ window.__ModuleLoader__.load({
         React.createElement('div', { key: 'init-hint', style: S.hint }, t('menu.empty.initHint')),
       ]
 
+      // Everything the control shows, in one list. The popup and the sidebar pane
+      // are two containers around exactly these children, so a rule added to the
+      // panel cannot land in one surface and miss the other.
+      const panel = [
+        React.createElement(
+          'div',
+          { key: 'head', style: S.head },
+          React.createElement('span', { style: S.headTitle }, t('title')),
+          React.createElement(
+            'span',
+            null,
+            actionBusy === null
+              ? // Both halves, because they update by different means: a page
+                // reload replaces the control (rN) while the Host keeps the
+                // module it loaded at startup (revN). Seeing them apart is
+                // what makes a stale Host obvious instead of mysterious.
+                typeof probe?.revision === 'string' && probe.revision.length > 0
+                ? `${BUILD} · ${probe.revision}`
+                : BUILD
+              : t('menu.running', { action: actionBusy.replace('/github ', '') }),
+          ),
+          // The pane has room for a refresh control of its own, and asking again
+          // is the one thing a persistent panel needs that a menu does not.
+          surface === 'pane'
+            ? React.createElement(
+                'button',
+                {
+                  key: 'pane-refresh',
+                  type: 'button',
+                  disabled,
+                  style: style(S.chip, disabled ? S.itemDisabled : undefined),
+                  onClick: () => {
+                    probeFresh.delete(sessionId)
+                    void refresh(sessionId, true)
+                  },
+                },
+                t('action.refresh'),
+              )
+            : null,
+        ),
+        busy === null
+          ? React.createElement(
+              'div',
+              { key: 'state', style: S.hint },
+              probeError === null
+                ? probe === null
+                  ? t('menu.checking')
+                  : isRepo
+                    ? t('menu.found')
+                    : // Naming the directory makes a workspace mismatch
+                      // visible instead of looking like a detection bug.
+                      typeof probe.workspace === 'string' && probe.workspace.length > 0
+                      ? `${probe.detail ?? t('menu.empty.hint')} (${probe.workspace})`
+                      : (probe.detail ?? t('menu.empty.hint'))
+                : probeError,
+            )
+          : null,
+        probeError === null
+          ? null
+          : React.createElement(
+              'button',
+              {
+                key: 'probe-retry',
+                type: 'button',
+                role: 'menuitem',
+                disabled,
+                style: style(S.item, disabled ? S.itemDisabled : undefined),
+                onClick: () => {
+                  // An explicit retry is a new attempt, so it clears the
+                  // recorded failure and the freshness window with it.
+                  probeAttempted.delete(sessionId)
+                  probeFresh.delete(sessionId)
+                  setProbeError(null)
+                  void refresh(sessionId, true)
+                },
+              },
+              t('action.retry'),
+            ),
+        // The change list sits above the actions it narrows: what is about
+        // to be committed is the question the buttons below answer, and the
+        // message options are part of the same question.
+        probeError === null && isRepo ? changesPanel : null,
+        probeError === null && isRepo ? hiddenNote : null,
+        probeError === null && (probe === null || isRepo) ? commitOptions : null,
+        // The repository actions are offered while the check is still in
+        // flight as well, so a probe that never answers degrades the menu
+        // to "unverified" rather than freezing it. Without an answer the
+        // clone and init entries are withheld, because offering them for a
+        // workspace that may already be a repository is the worse guess.
+        probeError === null && (probe === null || isRepo) ? repoMenu : null,
+        probeError === null && isRepo ? branchesPanel : null,
+        probeError === null && remoteMissing ? connectMenu : null,
+        probe !== null && !isRepo ? emptyMenu : null,
+        // Offered last, because it changes what everything above acts on.
+        probeError === null ? targetMenu : null,
+        // Only the menu offers the pane: the pane is already the pane.
+        surface === 'menu' && openSidebar !== null
+          ? React.createElement(
+              'button',
+              {
+                key: 'open-sidebar',
+                type: 'button',
+                role: 'menuitem',
+                style: S.item,
+                onClick: openSidebar,
+              },
+              t('sidebar.open'),
+            )
+          : null,
+        output === null
+          ? null
+          : React.createElement('pre', { key: 'output', style: style(S.output, failed ? S.outputError : undefined) }, output),
+      ]
+
+      // The sidebar pane: the same panel as a column of the page, with no popup to
+      // position, no dismissal, and the height the dock gives it.
+      if (surface === 'pane') {
+        return React.createElement('div', { style: S.pane, 'data-github-sync': '' }, ...panel)
+      }
+
       return React.createElement(
         'div',
         // `data-github-sync` is the containment boundary the dismiss listeners
@@ -1388,83 +1763,7 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: S.buttonText }, info.label),
         ),
         open
-          ? React.createElement(
-              'div',
-              { role: 'menu', style: S.menu },
-              React.createElement(
-                'div',
-                { style: S.head },
-                React.createElement('span', { style: S.headTitle }, t('title')),
-                React.createElement(
-                  'span',
-                  null,
-                  actionBusy === null
-                    ? // Both halves, because they update by different means: a page
-                      // reload replaces the control (rN) while the Host keeps the
-                      // module it loaded at startup (revN). Seeing them apart is
-                      // what makes a stale Host obvious instead of mysterious.
-                      typeof probe?.revision === 'string' && probe.revision.length > 0
-                      ? `${BUILD} · ${probe.revision}`
-                      : BUILD
-                    : t('menu.running', { action: actionBusy.replace('/github ', '') }),
-                ),
-              ),
-              busy === null
-                ? React.createElement(
-                    'div',
-                    { style: S.hint },
-                    probeError === null
-                      ? probe === null
-                        ? t('menu.checking')
-                        : isRepo
-                          ? t('menu.found')
-                          : // Naming the directory makes a workspace mismatch
-                            // visible instead of looking like a detection bug.
-                            typeof probe.workspace === 'string' && probe.workspace.length > 0
-                            ? `${probe.detail ?? t('menu.empty.hint')} (${probe.workspace})`
-                            : (probe.detail ?? t('menu.empty.hint'))
-                      : probeError,
-                  )
-                : null,
-              probeError === null
-                ? null
-                : React.createElement(
-                    'button',
-                    {
-                      key: 'probe-retry',
-                      type: 'button',
-                      role: 'menuitem',
-                      disabled,
-                      style: style(S.item, disabled ? S.itemDisabled : undefined),
-                      onClick: () => {
-                        // An explicit retry is a new attempt, so it clears the
-                        // recorded failure and the freshness window with it.
-                        probeAttempted.delete(sessionId)
-                        probeFresh.delete(sessionId)
-                        setProbeError(null)
-                        void refresh(sessionId, true)
-                      },
-                    },
-                    t('action.retry'),
-                  ),
-              // The change list sits above the actions it narrows: what is about
-              // to be committed is the question the buttons below answer.
-              probeError === null && isRepo ? changesPanel : null,
-              // The repository actions are offered while the check is still in
-              // flight as well, so a probe that never answers degrades the menu
-              // to "unverified" rather than freezing it. Without an answer the
-              // clone and init entries are withheld, because offering them for a
-              // workspace that may already be a repository is the worse guess.
-              probeError === null && (probe === null || isRepo) ? repoMenu : null,
-              probeError === null && isRepo ? branchesPanel : null,
-              probeError === null && remoteMissing ? connectMenu : null,
-              probe !== null && !isRepo ? emptyMenu : null,
-              // Offered last, because it changes what everything above acts on.
-              probeError === null ? targetMenu : null,
-              output === null
-                ? null
-                : React.createElement('pre', { style: style(S.output, failed ? S.outputError : undefined) }, output),
-            )
+          ? React.createElement('div', { role: 'menu', style: S.menu }, ...panel)
           : null,
       )
     }
@@ -1481,6 +1780,76 @@ window.__ModuleLoader__.load({
         // active locale selects between them, and English is the fallback for
         // any locale this plugin does not translate.
         ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { en: EN, zh: ZH }))
+        // The dock's services are looked up through `ctx.get`, never read as
+        // properties. Cordis answers a read of an undeclared service with a throw
+        // (`cannot get property "sidebarRight" without inject`), and a plugin that
+        // throws while activating takes its whole fiber down — which is how an
+        // optional extra can stop the client from booting. `ctx.get` returns
+        // `undefined` instead: a deployment without the right sidebar simply has no
+        // tab to add, and the menu is unaffected either way.
+        const sidebar = ctx.get('sidebarRight')
+        const sidebarTabs = ctx.get('sidebarRightTabs')
+        // The tab is registered before the menu is: the menu offers the way in only
+        // once the tab exists, because opening a kind nobody registered is an error
+        // on the dock's side, and an item that can only fail is worse than no item.
+        //
+        // The guard is inside each effect rather than around them: an effect body is
+        // the unit the runtime may run later, and a throw from there must not reach
+        // the plugin's activation either way. `console.warn` is used rather than
+        // `ctx.logger`, which is another service this plugin does not declare.
+        const guarded = (what, fn) => {
+          try {
+            return fn()
+          } catch (error) {
+            console.warn(`github-sync: ${what} failed: ${error instanceof Error ? error.message : String(error)}`)
+            return undefined
+          }
+        }
+        let sidebarReady = false
+        if (sidebar !== undefined && sidebarTabs !== undefined) {
+          // The right sidebar, extended the way the Files and Terminal features
+          // extend it: a tab type, then the body and the chip title registered
+          // under the same id. `extension` is the slot a plugin owns; a `kind`
+          // carries at most one of those beside the builtin one.
+          ctx.effect(() =>
+            guarded('registering the sidebar tab', () => {
+              const dispose = sidebarTabs.register({
+                id: SIDEBAR_ID,
+                kind: SIDEBAR_KIND,
+                priority: 'extension',
+                title: () => ctx.locale.bind(LOCALE_NAMESPACE)('sidebar.title'),
+              })
+              sidebarReady = true
+              return dispose
+            }),
+          )
+          ctx.effect(() =>
+            guarded('registering the sidebar pane', () =>
+              ctx.slots.inject('sidebar.right.pane.tab', () =>
+                ctx.slots.register(
+                  {
+                    name: 'sidebar.right.pane.tab',
+                    key: SIDEBAR_ID,
+                    locale: LOCALE_NAMESPACE,
+                    inject: () => ({ remote: ctx.remote, surface: 'pane' }),
+                  },
+                  GithubSyncButton,
+                ),
+              ),
+            ),
+          )
+          ctx.effect(() =>
+            guarded('registering the sidebar chip', () =>
+              ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+                ctx.slots.register(
+                  { name: 'sidebar.right.pane.tab.title', key: SIDEBAR_ID, locale: LOCALE_NAMESPACE },
+                  (props) => React.createElement('span', null, props?.t?.('sidebar.title') ?? 'GitHub'),
+                ),
+              ),
+            ),
+          )
+        }
+        const openSidebar = () => sidebar.openTab(SIDEBAR_KIND)
         ctx.slots.inject('conversation.input.left', () =>
           ctx.slots.register(
             {
@@ -1491,7 +1860,9 @@ window.__ModuleLoader__.load({
               locale: LOCALE_NAMESPACE,
               // The Remote command namespace is not part of the slot's standard
               // props, so it is injected explicitly for the component to call.
-              inject: () => ({ remote: ctx.remote }),
+              // `surface` is what makes one control render as a popup here and as
+              // a pane in the sidebar.
+              inject: () => ({ remote: ctx.remote, surface: 'menu', ...(sidebarReady ? { openSidebar } : {}) }),
             },
             GithubSyncButton,
           ),
