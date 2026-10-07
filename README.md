@@ -119,14 +119,37 @@ elsewhere is covering the thing the person just clicked.
 
 ### Choosing the message, and the markers CI reads
 
-Every commit-shaped action in the menu — **Commit locally**, **Commit & push**,
-and the **Connect & push** row — takes two choices that ride it:
+Every commit-shaped action in the menu — **Commit locally** and **Commit & push** —
+**asks before it records**. Clicking one opens a step under the buttons:
+
+```
+Commit & push · 3 path(s) will be recorded
+Commit message   [AI generated] [Write my own]
+CI markers       [skip ci] [release] [others…]
+                 [Record it] [Cancel]
+```
+
+The message and the markers belong to that decision, so they appear when the
+decision is being made instead of sitting in the panel the whole time — a panel
+that always shows a form for something nobody asked for reads as if it were already
+doing it. The step names the action and counts what will be recorded, the action's
+own button stays highlighted while it waits, and `Record it` is the click that runs
+the command. Everything that backs out works the way a person expects: **Cancel**,
+clicking the action again, `Escape` (which leaves the step first and closes the menu
+only on a second press), and closing the menu — an unconfirmed step never survives
+to the next open.
+
+The two choices the step carries:
 
 | Choice | What it does |
 |---|---|
 | **AI generated** (default) | The message is generated from the staged changes, as described under [Commit messages](#commit-messages). |
-| **Write my own** | A field for the message: the first line is the subject, later lines become the body. The commit buttons are disabled while it is empty, with the reason. A `"` is written as `'`, because the message travels on the `/github` line and that line is parsed by quoting. |
-| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). |
+| **Write my own** | A field for the message: the first line is the subject, later lines become the body. **Record it** is disabled while it is empty, with the reason. A `"` is written as `'`, because the message travels on the `/github` line and that line is parsed by quoting. |
+| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). The choice is remembered, so the next commit starts where the last one left off. |
+
+The **Connect & push** row (`/github init <url>`, which commits and pushes as well)
+uses whatever the last step left selected, and defaults to the generated message
+with no markers.
 
 A marker is recorded as a **bracketed paragraph at the end of the message**, never
 in the subject: the subject is capped at 72 characters and every CI system reads
@@ -144,7 +167,8 @@ On the other two surfaces the same two things are parameters:
 /github init https://github.com/me/repo.git --marker hotfix
 ```
 
-`github_sync` takes `message` and `markers` the same way.
+`github_sync` takes `message` and `markers` the same way — those surfaces ask by
+being given the values, which is what a caller already does.
 
 ### The same panel in the right sidebar
 

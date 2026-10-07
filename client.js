@@ -86,6 +86,9 @@ window.__ModuleLoader__.load({
       'commit.otherMarkers': 'Others',
       'commit.otherPlaceholder': 'comma separated, e.g. hotfix, deploy',
       'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
+      'commit.step': '{action} · {count} path(s) will be recorded',
+      'commit.confirm': 'Record it',
+      'commit.cancel': 'Cancel',
       'change.modified': 'modified',
       'change.added': 'added',
       'change.deleted': 'deleted',
@@ -173,6 +176,9 @@ window.__ModuleLoader__.load({
       'commit.otherMarkers': '其它',
       'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
+      'commit.step': '{action} · 将记录 {count} 个路径',
+      'commit.confirm': '确认记录',
+      'commit.cancel': '取消',
       'change.modified': '已修改',
       'change.added': '新增',
       'change.deleted': '已删除',
@@ -405,7 +411,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r26'
+    const BUILD = 'r27'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -479,6 +485,8 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       itemDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
+      /** The action whose message is being decided right now. */
+      itemPending: { color: 'var(--dsw-alias-brand-primary)', fontWeight: 600 },
       changeRow: {
         display: 'flex',
         alignItems: 'flex-start',
@@ -589,6 +597,14 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-brand-primary)',
         fontWeight: 600,
       },
+      /** The one chip that carries the step through: the commit itself. */
+      chipPrimary: {
+        borderColor: 'var(--dsw-alias-brand-primary)',
+        color: 'var(--dsw-alias-brand-primary)',
+        background: 'transparent',
+        fontWeight: 600,
+      },
+      chipDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
       customMessage: {
         margin: '2px 8px 4px',
         minHeight: 46,
@@ -798,6 +814,11 @@ window.__ModuleLoader__.load({
       const [customMessage, setCustomMessage] = React.useState('')
       const [presetMarkers, setPresetMarkers] = React.useState(() => new Set())
       const [otherMarkers, setOtherMarkers] = React.useState('')
+      // Which commit-shaped action is waiting for its message to be confirmed.
+      // The message and the markers belong to *that* decision, so they appear when
+      // the decision is being made: a panel that always shows a form for something
+      // nobody has asked for reads as if it were already doing it.
+      const [pendingAction, setPendingAction] = React.useState(null)
 
       // A ref mirrors the latest Remote namespace so the probe effect below can
       // depend on the session and the open state alone, without re-firing when
@@ -1094,6 +1115,9 @@ window.__ModuleLoader__.load({
         if (surface === 'pane' || open) return
         setOutput(null)
         setFailed(false)
+        // A step nobody confirmed does not survive the menu: reopening starts from
+        // the same place as the first open.
+        setPendingAction(null)
       }, [open, surface])
 
       // Dismiss the menu on the interactions that mean "I am done here": Escape,
@@ -1103,7 +1127,14 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!open) return undefined
         const onKey = (event) => {
-          if (event.key === 'Escape') setOpen(false)
+          if (event.key !== 'Escape') return
+          // Escape backs out of the commit step before it closes the menu: the
+          // menu was opened for a reason, and the step is what was just entered.
+          if (pendingAction !== null) {
+            setPendingAction(null)
+            return
+          }
+          setOpen(false)
         }
         // The control marks itself so containment can be asked of the event
         // target alone, without holding a node reference across renders.
@@ -1135,7 +1166,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('focusin', onFocusIn)
           window.removeEventListener('blur', onWindowBlur)
         }
-      }, [open])
+      }, [open, pendingAction])
 
       // Only a user action disables the menu. The background check never does,
       // so its outcome cannot take the controls away.
@@ -1552,22 +1583,66 @@ window.__ModuleLoader__.load({
             type: 'button',
             role: 'menuitem',
             disabled: disabled || blocked,
-            title: blocked ? (needCustom ? t('commit.needCustom') : t('changes.noneSelected')) : undefined,
-            style: style(S.item, disabled || blocked ? S.itemDisabled : undefined),
+            title: blocked ? t('changes.noneSelected') : undefined,
+            style: style(S.item, disabled || blocked ? S.itemDisabled : pendingAction === action.id ? S.itemPending : undefined),
             onClick: () => {
-              void run(
-                `/github ${action.id}${dirSuffix(sessionId)}${commitLike ? `${fileSuffix}${commitSuffix}` : ''}`,
-              ).then(() => {
-                // A recorded selection belongs to the commit that used it: the
-                // next change to the same path starts included again.
-                if (commitLike) setExcluded(new Set())
-                void refresh()
-              })
+              // A commit-shaped action asks first: the message and the markers are
+              // decided here, and the click that says "record this" is the confirm
+              // button in that step. Clicking the same action again backs out.
+              if (commitLike) {
+                setPendingAction((current) => (current === action.id ? null : action.id))
+                return
+              }
+              void run(`/github ${action.id}${dirSuffix(sessionId)}`).then(() => refresh())
             },
           },
           label,
         )
       })
+
+      // The step a commit-shaped action enters: what will be recorded, the message
+      // that records it, the markers a pipeline reads, and the click that does it.
+      const pendingLabel = pendingAction === null ? '' : t(pendingAction === 'sync' ? 'action.sync' : 'action.commit')
+      const commitStep =
+        pendingAction === null
+          ? null
+          : [
+              React.createElement(
+                'div',
+                { key: 'commit-step', style: S.hint },
+                t('commit.step', { action: pendingLabel, count: selected.length }),
+              ),
+              ...commitOptions,
+              React.createElement(
+                'div',
+                { key: 'commit-step-buttons', style: S.chips },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: disabled || needCustom,
+                    title: needCustom ? t('commit.needCustom') : undefined,
+                    style: style(S.chip, disabled || needCustom ? S.chipDisabled : S.chipPrimary),
+                    onClick: () => {
+                      const action = pendingAction
+                      setPendingAction(null)
+                      // A recorded selection belongs to the commit that used it: the
+                      // next change to the same path starts included again.
+                      setExcluded(new Set())
+                      void run(`/github ${action}${dirSuffix(sessionId)}${fileSuffix}${commitSuffix}`).then(() =>
+                        refresh(),
+                      )
+                    },
+                  },
+                  t('commit.confirm'),
+                ),
+                React.createElement(
+                  'button',
+                  { type: 'button', style: S.chip, onClick: () => setPendingAction(null) },
+                  t('commit.cancel'),
+                ),
+              ),
+            ]
 
       // A local repository with no remote needs one, and this is where it gets
       // one: the URL connects `origin`, then commits and pushes in the same
@@ -1705,13 +1780,15 @@ window.__ModuleLoader__.load({
         // message options are part of the same question.
         probeError === null && isRepo ? changesPanel : null,
         probeError === null && isRepo ? hiddenNote : null,
-        probeError === null && (probe === null || isRepo) ? commitOptions : null,
         // The repository actions are offered while the check is still in
         // flight as well, so a probe that never answers degrades the menu
         // to "unverified" rather than freezing it. Without an answer the
         // clone and init entries are withheld, because offering them for a
         // workspace that may already be a repository is the worse guess.
         probeError === null && (probe === null || isRepo) ? repoMenu : null,
+        // Directly under the buttons it belongs to, and only while one of them is
+        // waiting to be confirmed.
+        probeError === null && (probe === null || isRepo) ? commitStep : null,
         probeError === null && isRepo ? branchesPanel : null,
         probeError === null && remoteMissing ? connectMenu : null,
         probe !== null && !isRepo ? emptyMenu : null,
