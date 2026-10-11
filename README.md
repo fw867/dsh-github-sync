@@ -96,8 +96,64 @@ The menu offers:
 
 - **Refresh status** — working tree and upstream state
 - **Pull** — fetch and integrate the remote branch
-- **Commit & push** — stage everything, commit with a generated subject, push
+- **Commit & push** — stage everything, commit with a generated subject,
+  integrate the upstream, push
 - **Push only** — publish the current branch
+
+### Nothing is published on top of a moved upstream
+
+Publishing always integrates nothing silently. Two settings decide how much it
+does for you:
+
+| `integrateBeforePush` | On a diverged branch, `sync` / **Commit & push** |
+|---|---|
+| `false` — **the default** | Records the local commit, then refuses to push — exactly like **Push only** below |
+| `true` | Records the local commit, replays it onto the upstream, and pushes; if the replay conflicts, aborts and cancels |
+
+**The local commit is recorded first either way**, so the work is safe whatever
+happens next. What the setting changes is whether the branch is replayed onto the
+upstream for you.
+
+It is off by default because replaying rewrites the parent of local commits: that
+is invisible while they are unpublished, and disruptive once they are not. Turn it
+on when this workspace publishes straight after committing and you would rather
+integrate than be told to:
+
+```yaml
+- id: github-sync
+  name: 'dsh-github-sync'
+  config:
+    integrateBeforePush: true
+```
+
+With it on, a replay that conflicts is **aborted** — the repository returns to
+exactly the state it was in, the local commit intact, no half-merged files, no
+rebase left in progress — and the push does not happen:
+
+```
+integrate: failed — replaying this branch onto the upstream conflicts.
+Waiting upstream: 7c41fcb feat: shared.txt from colleague.
+the rebase was aborted, so nothing was changed.
+Resolve the conflict — merge or rebase by hand, or `/github pull` —
+then run the action again. Nothing was pushed.
+```
+
+Aborting is what makes integrating safe to enable at all: the one outcome that
+must never happen is a workspace left mid-rebase for a person to dig out of.
+
+A push that would not fast-forward is refused, naming the commits in the way and
+both counts:
+
+```
+push cancelled: <repo> has diverged from its upstream — 1 local commit(s) to
+publish and 1 upstream commit(s) to integrate.
+Waiting upstream: b007b8c feat: b.txt.
+Merge or rebase first (`/github pull`), then push again.
+To overwrite the upstream instead, pass --force.
+```
+
+`--force` is the one way past it, and it is always `--force-with-lease` — never a
+bare `--force` — so a colleague's push still cannot be discarded silently.
 
 The state is read when a session first appears, so switching to another workspace
 immediately shows that workspace's sync state rather than the previous one's.
@@ -154,13 +210,20 @@ The **Connect & push** row (`/github init <url>`, which commits and pushes as we
 uses whatever the last step left selected, and defaults to the generated message
 with no markers.
 
-A marker is recorded as a **bracketed paragraph at the end of the message**, never
-in the subject: the subject is capped at 72 characters and every CI system reads
-the whole message, so `feat(ui): keep the menu inside the viewport` stays readable
-while the pipeline still sees `[skip ci]`. The engine cleans what it is given —
-brackets are optional (`[skip ci]` and `skip ci` are the same request), whitespace
-is collapsed, at most five markers survive, and anything that is not plain words
-is dropped rather than committed.
+Markers are appended to the **subject line, right after the title**:
+
+```
+feat(ui): keep the menu inside the viewport [skip ci]
+```
+
+Line one is the part every surface keeps — the conversation header, `git log
+--oneline`, a squash dialog, a tool that reads only the summary — so a marker
+there survives all of them, where a trailing paragraph can be dropped by any of
+them. The engine cleans what it is given: brackets are optional (`[skip ci]` and
+`skip ci` are the same request), whitespace is collapsed, at most five markers
+survive, and anything that is not plain words is dropped rather than committed.
+Applying the same markers twice is idempotent, so amending a commit that already
+carries them does not write `[skip ci] [skip ci]`.
 
 On the other two surfaces the same two things are parameters:
 
@@ -640,6 +703,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     statusOnMount: true       # check when a session appears, or only when opened
     changesScope: tracked     # tracked: only changes to files git already has
     subdirectory: ''          # repository below the workspace root, when there is one
+    integrateBeforePush: false # replay local commits onto the upstream before pushing
     timeoutMs: 600000
 ```
 
@@ -738,7 +802,7 @@ reasoning-only answer is distinguishable from a provider that failed.
 | `url` | For `init`/`setup`: the remote to record and push to. |
 | `remote` | Remote name; defaults to the plugin config. |
 | `message` | Commit subject used verbatim instead of generating one. |
-| `markers` | CI markers, each bracketed on its own line at the end of the message: `["skip ci"]` writes `[skip ci]`, `["release", "skip ci"]` writes both. Plain words only, at most five, brackets optional. For `commit`, `sync`, and `amend`. |
+| `markers` | CI markers appended to the subject line after the title: `["skip ci"]` writes `feat: x [skip ci]`, `["release", "skip ci"]` writes both in that order. Plain words only, at most five, brackets optional. For `commit`, `sync`, `amend`, `init`, and `setup`. |
 | `pull` | For `sync`, pull with rebase before pushing. A failed pull stops the sync before the push. |
 | `allowEmpty` | Allow a commit when nothing changed. |
 
