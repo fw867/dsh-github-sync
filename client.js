@@ -30,6 +30,22 @@ window.__ModuleLoader__.load({
     const SIDEBAR_ID = 'dsh-github-sync'
     const SIDEBAR_KIND = 'github-sync'
 
+    /**
+     * The second tab this plugin adds: one file's patch, on its own.
+     *
+     * A patch is a document — it is compared against another patch, kept open while
+     * the commit list is read, and closed when it is done with. Showing it inside
+     * the repo panel made it share that panel's fate; a tab of its own is the shape
+     * the Files and document previews already use for the same reason.
+     *
+     * It is opened through a **resource address**, not `openTab`: a resource tab is
+     * recorded under the address, so two files are two tabs, and `title(address)`
+     * is captured when the tab mints — which is how the chip can name the file.
+     */
+    const DIFF_ID = 'dsh-github-sync/diff'
+    const DIFF_KIND = 'github-sync-diff'
+    const DIFF_PREFIX = 'dsh-resource://github-diff/'
+
     /** English copy; the locale service always falls back here. */
     const EN = {
       'title': 'GitHub sync',
@@ -68,6 +84,11 @@ window.__ModuleLoader__.load({
       'changes.summary': '{total} changed · {staged} staged',
       'changes.truncated': 'showing the first {shown}; more paths changed',
       'changes.diff': 'Diff',
+      'diff.unknownPath': 'changed file',
+      'diff.noText': 'No line-by-line comparison is available for this file.',
+      'diff.tabTitle': 'Diff: {path}',
+      'diff.chip': 'Diff',
+      'diff.noPath': 'This tab has no file to compare.',
       'changes.diffLabel': 'Show the diff of {path}',
       'changes.noneSelected': 'Nothing is selected, so there is nothing to commit. Tick at least one path.',
       'changes.selected': '{count} of {total} selected for the next commit',
@@ -159,6 +180,11 @@ window.__ModuleLoader__.load({
       'changes.summary': '共 {total} 项改动 · 已暂存 {staged}',
       'changes.truncated': '只显示前 {shown} 项，还有更多改动',
       'changes.diff': '差异',
+      'diff.unknownPath': '改动的文件',
+      'diff.noText': '该文件没有可逐行对比的内容。',
+      'diff.tabTitle': '差异：{path}',
+      'diff.chip': '差异',
+      'diff.noPath': '这个标签页没有可对比的文件。',
       'changes.diffLabel': '查看 {path} 的差异',
       'changes.noneSelected': '没有选中任何文件，无法提交。请至少勾选一项。',
       'changes.selected': '已选中 {count}/{total} 项，将进入下次提交',
@@ -339,6 +365,41 @@ window.__ModuleLoader__.load({
     const targetChoice = new Map()
 
     /**
+     * A diff the menu asked for, waiting for the sidebar pane to show it.
+     *
+     * The pane is a second mounted instance of the same component, so it cannot
+     * see the menu's `output` state. The menu records the path here and opens the
+     * pane; the pane consumes it on mount and runs the diff itself, which is also
+     * why the entry is cleared before the command runs — a re-render must not
+     * issue it twice.
+     */
+    const pendingDiff = new Map()
+
+    /**
+     * The test seam.
+     *
+     * The module-level channels above — and the two pure functions the patch
+     * rendering is built from — live in this factory's closure, so nothing outside
+     * can seed or observe them. Tests need to, and only tests should be able to:
+     * the seam is published **only** when the page has declared itself a test run
+     * by setting `globalThis.__DSH_TEST__`, so a shipped client exposes nothing.
+     *
+     * `parseUnifiedDiff` and `DiffView` are here for the same reason as the maps:
+     * they are the units worth asserting on, and reaching them any other way would
+     * mean exporting them from a bundle whose only contract is a `load` call.
+     */
+    if (globalThis.__DSH_TEST__ === true) {
+      globalThis.__githubSyncInternals = {
+        pendingDiff,
+        probeCache,
+        probeShape,
+        targetChoice,
+        parseUnifiedDiff,
+        DiffView,
+      }
+    }
+
+    /**
      * How long a probe may take before the menu gives up and offers a retry.
      * Bounded on purpose: a Remote call that never settles would otherwise
      * leave the menu showing "checking" forever with no way out.
@@ -413,7 +474,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r28'
+    const BUILD = 'r29'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -656,10 +717,351 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-primary)',
         fontSize: 13,
       },
+      // A patch is read, not glanced at, so it is a block of its own rather than
+      // the tail of the action log: a header naming the path and counting the
+      // change, then the hunks.
+      diff: {
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        margin: '4px 0 0',
+        border: '0.5px solid var(--dsw-alias-border-l1)',
+        borderRadius: 6,
+        overflow: 'hidden',
+        background: 'var(--dsw-alias-bg-base)',
+      },
+      diffHead: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 8px',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l1)',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      diffPath: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      },
+      diffStat: { flex: '0 0 auto', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+      diffBody: {
+        // The pane already scrolls; this bounds its own scroll so a long patch
+        // cannot push the change list out of reach in the popup.
+        maxHeight: 'min(46vh, 420px)',
+        overflow: 'auto',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      diffHunk: {
+        padding: '2px 8px',
+        color: 'var(--dsw-alias-label-secondary)',
+        background: 'var(--dsw-alias-bg-layer-1)',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+      },
+      diffRow: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
+      diffGutter: {
+        flex: '0 0 auto',
+        width: 34,
+        padding: '0 6px 0 0',
+        textAlign: 'right',
+        color: 'var(--dsw-alias-state-idle-primary)',
+        userSelect: 'none',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      diffSign: { flex: '0 0 auto', width: 12, textAlign: 'center', userSelect: 'none' },
+      diffText: { flex: '1 1 auto', minWidth: 0, paddingRight: 8 },
+      diffAdd: { background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent)' },
+      diffDel: { background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent)' },
+      diffAddText: { color: 'var(--dsw-alias-state-success-primary)' },
+      diffDelText: { color: 'var(--dsw-alias-state-error-primary)' },
+      diffNote: { padding: '4px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, lineHeight: '16px' },
     }
 
     /** Merge the base control style with a conditional override. */
     const style = (base, extra) => (extra === undefined ? base : { ...base, ...extra })
+
+    /**
+     * How deep the engine indents the patch it returns.
+     *
+     * A diff travels as the body of a `- diff: completed` step, so every line is
+     * indented to sit under that bullet. The indent is uniform, which is what
+     * makes it removable: the leading space of a context line is *inside* it, so a
+     * dedent has to strip a fixed prefix rather than the common one.
+     */
+    const DIFF_INDENT = '    '
+
+    /**
+     * Turn a patch into rows a person can read.
+     *
+     * The input is what `git diff` printed, wrapped in the engine's outcome text
+     * (a `<path> (branch <name>)` header, a `- diff: …` bullet, and the indented
+     * patch). Only the patch is of interest: the metadata lines name a revision
+     * nobody asked about, and the hunks carry the change.
+     *
+     * @param raw - the action's output text.
+     * @returns `{ path, hunks, additions, deletions, binary }`, or null when the
+     *   text holds no patch. Callers render the raw text in that case.
+     */
+    function parseUnifiedDiff(raw) {
+      if (typeof raw !== 'string' || raw.length === 0) return null
+      const lines = raw.split('\n')
+      let path = null
+      let binary = false
+      let additions = 0
+      let deletions = 0
+      const hunks = []
+      let hunk = null
+      let oldNo = 0
+      let newNo = 0
+      let sawHeader = false
+
+      for (const line of lines) {
+        const body = line.startsWith(DIFF_INDENT) ? line.slice(DIFF_INDENT.length) : line
+        if (body.startsWith('diff --git ')) {
+          // `diff --git a/<path> b/<path>`: the b-side is the file as it will be.
+          sawHeader = true
+          const match = /^diff --git a\/(.+) b\/(.+)$/.exec(body)
+          if (match !== null) path = match[2]
+          continue
+        }
+        if (/^(index|new file mode|deleted file mode|old mode|new mode|similarity index|rename (from|to)|copy (from|to)) /.test(body)) {
+          continue
+        }
+        if (body === 'Binary files differ' || body.startsWith('Binary files ')) {
+          binary = true
+          continue
+        }
+        if (body.startsWith('--- ') || body.startsWith('+++ ')) continue
+        if (body.startsWith('@@')) {
+          const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(body)
+          oldNo = match === null ? 0 : Number(match[1])
+          newNo = match === null ? 0 : Number(match[2])
+          hunk = { header: body, rows: [] }
+          hunks.push(hunk)
+          continue
+        }
+        if (hunk === null) continue
+        const sign = body.charAt(0)
+        if (sign === '+') {
+          hunk.rows.push({ kind: 'add', sign: '+', oldNo: null, newNo, text: body.slice(1) })
+          newNo += 1
+          additions += 1
+        } else if (sign === '-') {
+          hunk.rows.push({ kind: 'del', sign: '-', oldNo, newNo: null, text: body.slice(1) })
+          oldNo += 1
+          deletions += 1
+        } else if (sign === ' ' || body.length === 0) {
+          hunk.rows.push({ kind: 'ctx', sign: ' ', oldNo, newNo, text: body.slice(1) })
+          oldNo += 1
+          newNo += 1
+        } else if (sign === '\\') {
+          // `\ No newline at end of file` annotates the line above it.
+          hunk.rows.push({ kind: 'note', sign: '', oldNo: null, newNo: null, text: body.slice(1).trim() })
+        }
+      }
+
+      if (!sawHeader) return null
+      // A binary patch has a header and no hunks, and that is worth naming: the
+      // reader should see which file has no lines to compare rather than a
+      // verbatim blob of git's output.
+      if (hunks.length === 0 && !binary) return null
+      return { path, hunks, additions, deletions, binary }
+    }
+
+    /**
+     * One file's patch, as a block: where it is, how much changed, and the hunks.
+     *
+     * Both callers share the engine's outcome text, so the patch is parsed here
+     * rather than fetched again — the command has already run by the time this
+     * renders.
+     */
+    function DiffView({ patch, t }) {
+      const head = React.createElement(
+        'div',
+        { style: S.diffHead },
+        React.createElement('span', { style: S.diffPath, title: patch.path ?? '' }, patch.path ?? t('diff.unknownPath')),
+        React.createElement(
+          'span',
+          { style: S.diffStat },
+          React.createElement('span', { style: S.diffAddText }, `+${patch.additions}`),
+          ' ',
+          React.createElement('span', { style: S.diffDelText }, `−${patch.deletions}`),
+        ),
+      )
+      if (patch.binary === true || patch.hunks.length === 0) {
+        return React.createElement(
+          'div',
+          { style: S.diff },
+          head,
+          React.createElement('div', { style: S.diffNote }, t('diff.noText')),
+        )
+      }
+      const body = []
+      patch.hunks.forEach((hunk, hunkIndex) => {
+        body.push(
+          React.createElement('div', { key: `h${hunkIndex}`, style: S.diffHunk }, hunk.header),
+        )
+        hunk.rows.forEach((row, rowIndex) => {
+          const background = row.kind === 'add' ? S.diffAdd : row.kind === 'del' ? S.diffDel : undefined
+          const signColor = row.kind === 'add' ? S.diffAddText : row.kind === 'del' ? S.diffDelText : undefined
+          body.push(
+            React.createElement(
+              'div',
+              { key: `h${hunkIndex}r${rowIndex}`, style: style(S.diffRow, background) },
+              React.createElement('span', { style: S.diffGutter }, row.oldNo === null ? '' : String(row.oldNo)),
+              React.createElement('span', { style: S.diffGutter }, row.newNo === null ? '' : String(row.newNo)),
+              React.createElement('span', { style: style(S.diffSign, signColor) }, row.sign),
+              React.createElement('span', { style: S.diffText }, row.text),
+            ),
+          )
+        })
+      })
+      return React.createElement(
+        'div',
+        { style: S.diff },
+        head,
+        React.createElement('div', { style: S.diffBody }, ...body),
+      )
+    }
+
+    /**
+     * The address a file's diff tab is recorded under.
+     *
+     * The path is encoded, because an address is a URI and a path may hold spaces
+     * or `#`. `title()` decodes it again for the chip.
+     */
+    function diffAddress(sessionId, path) {
+      return `${DIFF_PREFIX}${encodeURIComponent(sessionId)}/${encodeURIComponent(path)}`
+    }
+
+    /** The title of a diff tab: the file's own name, path and all. */
+    function diffTitle(address, t) {
+      const path = diffPathOf(address)
+      return path === null ? t('sidebar.title') : t('diff.tabTitle', { path })
+    }
+
+    /** The path a diff address carries, or null when it is not one. */
+    function diffPathOf(address) {
+      if (typeof address !== 'string' || !address.startsWith(DIFF_PREFIX)) return null
+      const rest = address.slice(DIFF_PREFIX.length)
+      const slash = rest.indexOf('/')
+      if (slash < 0) return null
+      try {
+        return decodeURIComponent(rest.slice(slash + 1))
+      } catch {
+        return rest.slice(slash + 1)
+      }
+    }
+
+    /**
+     * One file's patch, as a sidebar tab.
+     *
+     * The tab owns its own request: the menu records the address it wants opened,
+     * and this runs the diff once and keeps the result for as long as the tab is
+     * open. That is what makes a tab a document rather than a view onto the panel —
+     * two files can be compared by flicking between two tabs, and neither loses its
+     * patch when the menu closes.
+     */
+    function GithubDiffTab(props) {
+      const address = props?.address ?? props?.tab?.address ?? null
+      const sessionId = props?.sessionId
+      const remote = props?.remote
+      const t = props?.t ?? ((key) => key)
+      const path = diffPathOf(address)
+      // Three states, and they are distinct on purpose: `undefined` means the
+      // command has not answered yet, a string is the answer, and with `failed`
+      // set that answer is the reason it did not work. A tab that has an answer
+      // must render it — never keep claiming to be checking.
+      const [output, setOutput] = React.useState(undefined)
+      const [failed, setFailed] = React.useState(false)
+      const [asked, setAsked] = React.useState(false)
+      const remoteRef = React.useRef(remote)
+      remoteRef.current = remote
+
+      React.useEffect(() => {
+        if (path === null || sessionId === undefined || asked === true) return undefined
+        const commands = commandsOf(remoteRef.current)
+        if (commands?.execute === undefined) {
+          setFailed(true)
+          setOutput(t('error.unavailable'))
+          return undefined
+        }
+        // The path travels as `--dir`-free text on the command line, so it is
+        // quoted: a path with a space is otherwise two arguments.
+        const line = `/github diff --file "${path}"`
+        let cancelled = false
+        // Marked before the await, so a re-render during the await does not issue
+        // the same command a second time.
+        setAsked(true)
+        const show = async () => {
+          try {
+            const response = await commands.execute(sessionId, line, [])
+            if (cancelled) return
+            if (response?.ok !== true) {
+              setFailed(true)
+              setOutput(t('error.refused', { command: line }))
+              return
+            }
+            const text = resultText(response)
+            if (text === undefined) {
+              setFailed(true)
+              setOutput(t('error.probeUnexpected'))
+              return
+            }
+            setFailed(false)
+            setOutput(text)
+          } catch (error) {
+            if (cancelled) return
+            setFailed(true)
+            setOutput(error instanceof Error ? error.message : String(error))
+          }
+        }
+        void show()
+        return () => {
+          cancelled = true
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [address, sessionId])
+
+      // Parsing is attempted on whatever came back. A `diff` command answers with
+      // `renderOutcome`'s text, which is a patch for a file and something else for
+      // a `--stat` run, so this must not assume: anything the parser does not claim
+      // is shown verbatim, and a parser that throws is treated the same way rather
+      // than taking the tab down with it.
+      let patch = null
+      if (failed !== true && typeof output === 'string') {
+        try {
+          patch = parseUnifiedDiff(output)
+        } catch {
+          patch = null
+        }
+      }
+      if (path === null) {
+        return React.createElement('div', { style: S.pane }, t('diff.noPath'))
+      }
+      // Only "no answer yet" reads as progress. Once anything has arrived it is
+      // rendered, and a failure reports itself rather than waiting for a second
+      // attempt that is never coming.
+      if (output === undefined) {
+        return React.createElement('div', { style: S.pane }, t('menu.checking'))
+      }
+      if (patch === null) {
+        return React.createElement(
+          'div',
+          { style: S.pane },
+          React.createElement('pre', { style: style(S.output, failed ? S.outputError : undefined) }, output),
+        )
+      }
+      return React.createElement('div', { style: S.pane, 'data-github-sync': '' }, React.createElement(DiffView, { patch, t }))
+    }
 
     /** The branch glyph, drawn from the current label colour. */
     function BranchIcon({ size = 14 }) {
@@ -799,6 +1201,7 @@ window.__ModuleLoader__.load({
       // present in the other by construction, and only the container differs.
       const surface = props.surface === 'pane' ? 'pane' : 'menu'
       const openSidebar = typeof props.openSidebar === 'function' ? props.openSidebar : null
+      const openDiffTab = typeof props.openDiffTab === 'function' ? props.openDiffTab : null
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
@@ -1130,6 +1533,31 @@ window.__ModuleLoader__.load({
         setPendingAction(null)
       }, [open, surface])
 
+      // The diff the menu handed over, if this pane was opened for one. The
+      // request is cleared before the command runs, so a re-render — or the pane
+      // being remounted — cannot issue the same diff twice.
+      React.useEffect(() => {
+        if (surface !== 'pane' || sessionId === undefined) return undefined
+        const path = pendingDiff.get(sessionId)
+        if (path === undefined) return undefined
+        pendingDiff.delete(sessionId)
+        let cancelled = false
+        const show = async () => {
+          try {
+            await run(`/github diff --file "${path}"${dirSuffix(sessionId)}`)
+          } catch (error) {
+            setFailed(true)
+            setOutput(error instanceof Error ? error.message : String(error))
+          }
+          if (cancelled) return
+        }
+        void show()
+        return () => {
+          cancelled = true
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [surface, sessionId])
+
       // Dismiss the menu on the interactions that mean "I am done here": Escape,
       // a press anywhere outside the control, focus moving out of it, or the
       // window losing focus. A popup that survives a click elsewhere covers the
@@ -1400,6 +1828,22 @@ window.__ModuleLoader__.load({
                       style: style(S.changeAction, disabled ? S.itemDisabled : undefined),
                       title: t('changes.diffLabel', { path: entry[0] }),
                       onClick: () => {
+                        // A patch is a document: it is compared against another
+                        // patch, kept open while the change list is read, and closed
+                        // when it is done with. So it gets a tab of its own, and the
+                        // change list stays where it was. Without the dock's tab
+                        // registry the pane is the fallback, and without a sidebar at
+                        // all the patch renders in the menu — the same answer at
+                        // three levels of capability.
+                        if (openDiffTab !== null && sessionId !== undefined) {
+                          openDiffTab(sessionId, entry[0])
+                          return
+                        }
+                        if (openSidebar !== null) {
+                          pendingDiff.set(sessionId, entry[0])
+                          openSidebar()
+                          return
+                        }
                         void run(`/github diff --file "${entry[0]}"${dirSuffix(sessionId)}`).then(() => refresh())
                       },
                     },
@@ -1825,7 +2269,19 @@ window.__ModuleLoader__.load({
           : null,
         output === null
           ? null
-          : React.createElement('pre', { key: 'output', style: style(S.output, failed ? S.outputError : undefined) }, output),
+          : (() => {
+              // A patch gets the readable treatment; everything else — a log, an
+              // error, a branch list — stays verbatim, because rendering it as
+              // anything else would be inventing structure that is not there.
+              const patch = failed === true ? null : parseUnifiedDiff(output)
+              return patch === null
+                ? React.createElement(
+                    'pre',
+                    { key: 'output', style: style(S.output, failed ? S.outputError : undefined) },
+                    output,
+                  )
+                : React.createElement(DiffView, { key: 'diff', patch, t })
+            })(),
       ]
 
       // The sidebar pane: the same panel as a column of the page, with no popup to
@@ -1898,6 +2354,7 @@ window.__ModuleLoader__.load({
           }
         }
         let sidebarReady = false
+        let diffReady = false
         if (sidebar !== undefined && sidebarTabs !== undefined) {
           // The right sidebar, extended the way the Files and Terminal features
           // extend it: a tab type, then the body and the chip title registered
@@ -1940,8 +2397,53 @@ window.__ModuleLoader__.load({
               ),
             ),
           )
+          // The diff tab is registered before the menu for the same reason the
+          // sidebar tab is: an item that opens a kind nobody registered is an error
+          // on the dock's side.
+          ctx.effect(() =>
+            guarded('registering the diff tab', () => {
+              const dispose = sidebarTabs.register({
+                id: DIFF_ID,
+                kind: DIFF_KIND,
+                priority: 'extension',
+                patterns: [`${DIFF_PREFIX}**`],
+                title: (address) =>
+                  ctx.locale.bind(LOCALE_NAMESPACE)('diff.tabTitle', { path: diffPathOf(address) ?? '' }),
+              })
+              diffReady = true
+              return dispose
+            }),
+          )
+          ctx.effect(() =>
+            guarded('registering the diff pane', () =>
+              ctx.slots.inject('sidebar.right.pane.tab', () =>
+                ctx.slots.register(
+                  {
+                    name: 'sidebar.right.pane.tab',
+                    key: DIFF_ID,
+                    locale: LOCALE_NAMESPACE,
+                    inject: () => ({ remote: ctx.remote }),
+                  },
+                  GithubDiffTab,
+                ),
+              ),
+            ),
+          )
+          ctx.effect(() =>
+            guarded('registering the diff chip', () =>
+              ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+                ctx.slots.register(
+                  { name: 'sidebar.right.pane.tab.title', key: DIFF_ID, locale: LOCALE_NAMESPACE },
+                  (props) => React.createElement('span', null, props?.t?.('diff.chip') ?? 'Diff'),
+                ),
+              ),
+            ),
+          )
         }
         const openSidebar = () => sidebar.openTab(SIDEBAR_KIND)
+        // A resource tab *beside* the repo panel rather than in place of it, so the
+        // change list stays where it was and each file's patch keeps its own tab.
+        const openDiffTab = (session, path) => sidebar.openResource(diffAddress(session, path))
         ctx.slots.inject('conversation.input.left', () =>
           ctx.slots.register(
             {
@@ -1954,7 +2456,12 @@ window.__ModuleLoader__.load({
               // props, so it is injected explicitly for the component to call.
               // `surface` is what makes one control render as a popup here and as
               // a pane in the sidebar.
-              inject: () => ({ remote: ctx.remote, surface: 'menu', ...(sidebarReady ? { openSidebar } : {}) }),
+              inject: () => ({
+                remote: ctx.remote,
+                surface: 'menu',
+                ...(sidebarReady ? { openSidebar } : {}),
+                ...(diffReady ? { openDiffTab } : {}),
+              }),
             },
             GithubSyncButton,
           ),

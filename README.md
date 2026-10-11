@@ -506,39 +506,109 @@ caller narrow it.
 
 ### The list is the commit's contract
 
-The change list shows **changes to files git already has**: a modification, a
-deletion, a rename, a conflict. It does not show:
+The change list shows **what git reports**: a modification, a deletion, a rename, a
+conflict, and **a file git does not track yet**. It does not show:
 
 | Not listed | Why, and what happens to it |
 |---|---|
-| A file git does not track yet (`??`) | It is not in the repository, so "what changed" is not the question it answers. It is **not committed** either: the button stages with `git add --update`, so a commit records exactly what the list showed. `git add` the file (or the **stage** action) and it becomes an ordinary tracked change the button records. |
-| A path `.gitignore` matches | Even when git still reports it — a file that was committed *before* the pattern was added is in the index, and git keeps showing its modifications because a commit would include it. Here `.gitignore` is the last word: it is neither listed nor recorded, via a pathspec exclusion. |
+| A path `.gitignore` matches | Git does not offer it either, so nothing has to withhold it. The one case git *does* keep reporting is a file committed **before** the pattern was added: it is in the index, so git shows its modifications because a commit would include it. `changesScope: 'tracked'` treats `.gitignore` as the last word there and excludes it via a pathspec exclusion. |
 | Anything already ignored and untracked | Git never reports these without `--ignored`, and the plugin never asks for them. |
+
+`changesScope` decides which of git's answers the list uses:
+
+| Value | Lists | Stages |
+|---|---|---|
+| `all` — **the default** | Everything git reports, a new file included | `git add -A`, so the commit records exactly what was listed |
+| `tracked` | Only changes to files git already has | `git add --update`, plus a pathspec exclusion per ignored tracked path |
+
+A new file has to be **listed to be selectable**: under `tracked` there was no way
+to bring one into a commit from the control at all, only with `git add` by hand.
+`all` is therefore the default, and the list and the commit agree in both modes —
+the button records what it showed, never more.
+
+That also means `all` will commit **whatever is untracked and not ignored** in the
+workspace. When a workspace fills with build output or scratch files, choose
+`tracked` (`changesScope: tracked`), or add them to `.gitignore` — which both modes
+respect.
 
 What the list leaves out is still **disclosed as a count** (`{count} change(s) are
 not listed: …`), because a repository whose only change is a new file must not look
-untouched: the badge stays dirty and the menu says why the list is empty.
-
-`changesScope: 'all'` restores git's own view — untracked files are listed and
-committed by `git add -A`, and a tracked path matched by a pattern is ordinary.
-The strict scope is the default. Both are checked against a real repository: an
-ignored file never appears in either, a rename stays one entry carrying its
-original path, and a commit records the listed paths and nothing else — including
-the case of a new file that is added with `git add` first, which then commits like
-any other tracked change.
+untouched: the badge stays dirty and the menu says why the list is empty. Both
+modes are checked against a real repository: an ignored file never appears in
+either, a new file is listed and committed under `all` but withheld and left
+untracked under `tracked`, a rename stays one entry carrying its original path, and
+a commit records the listed paths and nothing else.
 
 The workspace check reports the change list along with the branch, so the menu
 needs no second command to draw it. Each path carries its git status code and a
-plain description of it (`staged added`, `modified, not staged`), and the menu
-shows them with a checkbox and a **Diff** button:
+plain description of it (`staged added`, `modified, not staged`, `untracked`), and
+the menu shows them with a checkbox and a **Diff** button:
 
 - **Ticked is the default.** Unticking a path narrows the next
   **Commit locally** / **Commit & push**, whose label counts what will go in.
   Untick everything and the buttons are disabled with the reason, rather than
   sending a commit that can only do nothing.
-- **Diff** asks for one path's patch. It shows the change against `HEAD` — what
-  committing that path as it stands would record — and falls back to the index in
-  a repository with no commit yet.
+- **Diff** asks for one path's patch, and opens it as **a tab of its own** in the
+  right sidebar. A patch is a document: it is compared against another patch, kept
+  open while the change list is read, and closed when it is done with. So it does
+  not take over the repository panel — the change list stays where it was, and each
+  file gets its own tab titled `Diff: <path>`, so two files are two tabs.
+
+  It is opened through a **resource address** (`dsh-resource://github-diff/<session>/<path>`,
+  the path URI-encoded) rather than a plain page tab, because an address is what
+  makes the chip able to name the file and what keeps two files in two tabs.
+
+  Where a patch lands follows the capabilities the deployment has:
+
+  | The deployment | Clicking **Diff** |
+  |---|---|
+  | Has the dock's tab registry | Opens a tab of its own (above) |
+  | Has the dock but no tab registry | Opens the repository panel and shows the patch there |
+  | Has no dock | Runs the diff and renders it in the menu |
+
+  It shows the change against `HEAD` — what committing that path as it stands
+  would record — and falls back to the index in a repository with no commit yet.
+
+### Rendering a patch
+
+The patch is not printed verbatim. `git diff` output is parsed into rows and drawn
+as a comparison, because the raw text buries the change in metadata:
+
+| Rendered | Dropped |
+|---|---|
+| Two line-number gutters, old and new | `diff --git`, `index`, file modes, rename/copy headers |
+| A `+` / `−` / space sign in its own column | `--- a/…` and `+++ b/…` |
+| Added lines on the success colour, removed on the error colour | The engine's own `<path> (branch …)` and `- diff: …` wrapper |
+| The hunk header, on its own row | |
+
+A file whose patch carries no lines — a binary — is still **named**, with a note
+that there is nothing to compare, rather than dumping git's binary notice. Nothing
+is invented for it.
+
+The parser is deliberately conservative: text that is not a patch is rendered
+verbatim, because reading a log or an error as structure would be making it up.
+That is also what keeps one code path honest — the change list, the branch list,
+and a commit's own log all travel as the same outcome text.
+
+#### The test seam
+
+The module-level maps the two mounted instances communicate through, and the two
+pure functions the patch rendering is built from, live in the client bundle's
+factory closure: nothing outside can seed or observe them, and the bundle's only
+contract is a `load` call.
+
+Tests need them, and only tests should be able to. So they are published under
+`globalThis.__githubSyncInternals` **only** when the page has declared itself a
+test run:
+
+```js
+globalThis.__DSH_TEST__ = true   // set before the bundle loads
+```
+
+A shipped page sets nothing and therefore exposes nothing. The guard is an
+identity test, `globalThis.__DSH_TEST__ === true`, so a `"true"` string, a `1`, or
+any other truthy value does not open it. The client adds exactly one global, and
+only behind that flag.
 
 The same shape is on both other surfaces:
 
@@ -701,7 +771,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     auth: auto                # auto: ssh, then token, then the system helper
     fetchOnStatus: false      # fetch before reporting ahead/behind counts
     statusOnMount: true       # check when a session appears, or only when opened
-    changesScope: tracked     # tracked: only changes to files git already has
+    changesScope: all         # all: git's view, untracked files included
     subdirectory: ''          # repository below the workspace root, when there is one
     integrateBeforePush: false # replay local commits onto the upstream before pushing
     timeoutMs: 600000
