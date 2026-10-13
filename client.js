@@ -474,7 +474,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r29'
+    const BUILD = 'r31'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -647,7 +647,13 @@ window.__ModuleLoader__.load({
       chip: {
         flex: '0 0 auto',
         padding: '3px 8px',
-        border: '0.5px solid var(--dsw-alias-border-l2)',
+        // Longhand, not the `border` shorthand: the selected state recolours the
+        // edge and must not change its width. Growing the border by half a pixel
+        // shifts the chip and redraws its outline, which reads as a dark frame
+        // appearing around it — and that is exactly what it was doing.
+        borderStyle: 'solid',
+        borderWidth: 1,
+        borderColor: 'var(--dsw-alias-border-l2)',
         borderRadius: 999,
         background: 'transparent',
         color: 'var(--dsw-alias-label-secondary)',
@@ -656,7 +662,13 @@ window.__ModuleLoader__.load({
         cursor: 'pointer',
       },
       chipOn: {
+        // A selected marker has to be unmistakable at a glance: this list is the
+        // last thing read before a commit, and an appended marker is invisible in
+        // the command that follows. So the chip fills and ticks — colour alone is
+        // not enough to read across a row of same-shaped pills, and it is the only
+        // cue some people can use. The edge keeps its width and only recolours.
         borderColor: 'var(--dsw-alias-brand-primary)',
+        background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
         color: 'var(--dsw-alias-brand-primary)',
         fontWeight: 600,
       },
@@ -1704,21 +1716,25 @@ window.__ModuleLoader__.load({
       }
 
       const markerChips = (presets) =>
-        presets.map((marker) =>
-          React.createElement(
+        presets.map((marker) => {
+          const on = presetMarkers.has(marker)
+          return React.createElement(
             'button',
             {
               key: `marker-${marker}`,
               type: 'button',
               role: 'menuitemcheckbox',
-              'aria-checked': presetMarkers.has(marker),
+              'aria-checked': on,
               disabled,
-              style: style(S.chip, presetMarkers.has(marker) ? S.chipOn : undefined),
+              style: style(S.chip, on ? S.chipOn : undefined),
               onClick: () => toggleMarker(marker),
             },
-            `[${marker}]`,
-          ),
-        )
+            // The tick is the state, not decoration: it is what distinguishes a
+            // selected chip from an unselected one at a glance. The unreserved
+            // width keeps a row of chips from shifting as they are ticked.
+            on ? `✓ [${marker}]` : `[${marker}]`,
+          )
+        })
 
       const commitOptions = [
         React.createElement('div', { key: 'commit-label', style: S.hint }, t('commit.options')),
