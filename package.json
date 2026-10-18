@@ -2,6 +2,9 @@
   "name": "dsh-github-sync",
   "version": "2.12.1",
   "private": true,
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
   "type": "module",
   "description": "Clone, pull, and auto-push GitHub repositories for a DSH workspace, with automatically generated commit titles and a composer button.",
   "icon": "./icon.svg",
@@ -15,6 +18,7 @@
     "index.js",
     "client.js",
     "lib/**/*.js",
+    "test/**/*.mjs",
     "cordis.patch.yml",
     "icon.svg",
     "locale/*.json"

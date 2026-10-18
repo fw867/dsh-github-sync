@@ -104,6 +104,9 @@ window.__ModuleLoader__.load({
       'commit.customNote': 'A double quote is written as a single quote, because the message travels on the /github line.',
       'commit.markers': 'CI markers',
       'commit.markerHint': 'Appended to the subject line, right after the title.',
+      'commit.markerNone': 'No marker will be added.',
+      'commit.markerWillAdd': 'Will add: {markers}',
+      'commit.markerClear': 'Clear',
       'commit.otherMarkers': 'Others',
       'commit.otherPlaceholder': 'comma separated, e.g. hotfix, deploy',
       'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
@@ -200,6 +203,9 @@ window.__ModuleLoader__.load({
       'commit.customNote': '双引号会被写成单引号 —— 消息要经由 /github 命令行传递。',
       'commit.markers': 'CI 标识',
       'commit.markerHint': '追加在标题行末尾，紧跟主标题之后。',
+      'commit.markerNone': '不会添加任何标识。',
+      'commit.markerWillAdd': '将添加：{markers}',
+      'commit.markerClear': '清空',
       'commit.otherMarkers': '其它',
       'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
@@ -474,7 +480,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r31'
+    const BUILD = 'r33'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -661,6 +667,16 @@ window.__ModuleLoader__.load({
         lineHeight: '16px',
         cursor: 'pointer',
       },
+      /** The line that states which markers the next commit will carry. */
+      markerSummary: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '2px 8px',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      markerSummaryOn: { flex: '1 1 auto', minWidth: 0, color: 'var(--dsw-alias-brand-primary)', fontWeight: 600 },
       chipOn: {
         // A selected marker has to be unmistakable at a glance: this list is the
         // last thing read before a commit, and an appended marker is invisible in
@@ -1799,6 +1815,38 @@ window.__ModuleLoader__.load({
           }),
         ),
         React.createElement('div', { key: 'commit-marker-hint', style: S.hint }, t('commit.markerHint')),
+        // What will actually be appended, stated in the panel. A marker is
+        // invisible once it is on the command line, and this state outlives one
+        // commit — it stays until it is changed or the page reloads — so a
+        // carried-over selection has to be visible *before* the commit, not
+        // discovered in the message afterwards.
+        React.createElement(
+          'div',
+          { key: 'commit-marker-summary', style: S.markerSummary },
+          React.createElement(
+            'span',
+            { style: markers.length === 0 ? S.hint : S.markerSummaryOn },
+            markers.length === 0
+              ? t('commit.markerNone')
+              : t('commit.markerWillAdd', { markers: markers.map((m) => `[${m}]`).join(' ') }),
+          ),
+          markers.length === 0
+            ? null
+            : React.createElement(
+                'button',
+                {
+                  key: 'marker-clear',
+                  type: 'button',
+                  disabled,
+                  style: style(S.chip, disabled ? S.itemDisabled : undefined),
+                  onClick: () => {
+                    setPresetMarkers(new Set())
+                    setOtherMarkers('')
+                  },
+                },
+                t('commit.markerClear'),
+              ),
+        ),
       ]
 
       const changesPanel =

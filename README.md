@@ -204,11 +204,55 @@ The two choices the step carries:
 |---|---|
 | **AI generated** (default) | The message is generated from the staged changes, as described under [Commit messages](#commit-messages). |
 | **Write my own** | A field for the message: the first line is the subject, later lines become the body. **Record it** is disabled while it is empty, with the reason. A `"` is written as `'`, because the message travels on the `/github` line and that line is parsed by quoting. |
-| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). The choice is remembered, so the next commit starts where the last one left off. |
+| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). A ticked chip fills and shows a `✓`, and the line under it states what the next commit will carry — `No marker will be added.` or `Will add: [release]` — with a **Clear** control once anything is set. |
 
 The **Connect & push** row (`/github init <url>`, which commits and pushes as well)
 uses whatever the last step left selected, and defaults to the generated message
 with no markers.
+
+**The marker selection outlives one commit.** It is component state, so it survives
+commits within a session and is reset by a page reload — which is why the panel
+states what the next commit will carry rather than leaving it to be discovered in
+the message afterwards. **Clear** empties both the chips and the free-text field in
+one go.
+
+**The marker control is the only thing that decides what a commit carries.** The
+model is asked for a Conventional Commits subject and a body and is never asked for
+a marker, and the engine composes the selection onto line one after generation. A
+subject that arrives already carrying a marker is therefore stripped before the
+selection is applied — which matters because the prompt quotes the repository's
+recent subject lines as examples to follow, so a model shown a `[release]` will
+happily write one:
+
+| Model wrote | Selected | Recorded |
+|---|---|---|
+| `feat: x [release]` | *(nothing)* | `feat: x` |
+| `feat: x [release]` | `[skip ci]` | `feat: x [skip ci]` |
+| `feat: x [release]` | `[release]` | `feat: x [release]` |
+| `fix: handle [TAG] and [other]` | *(nothing)* | `fix: handle [TAG] and [other]` |
+
+Only a marker the plugin knows — the chips, plus whatever is selected — is removed,
+and only from the end of the line. `[TAG]` in prose is left alone, because syntax
+cannot tell a marker from a bracketed word and a wrong guess would edit the message.
+
+## Tests
+
+```
+pnpm test        # or: node test/run.mjs
+```
+
+Two files, both self-contained:
+
+| File | What it pins |
+|---|---|
+| `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
+| `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
+
+They load the shipped `client.js` and read its dictionaries, so a renamed key or a
+changed default fails here rather than in the browser. The client publishes its
+internals only when a test declares itself one (`globalThis.__DSH_TEST__ = true`,
+set before the bundle loads); a shipped page exposes nothing.
+
 
 Markers are appended to the **subject line, right after the title**:
 
