@@ -269,9 +269,10 @@ Each file is self-contained:
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | The auto-rebase switch: it starts from the config, a click is remembered and travels as `--integrate`/`--no-integrate`, and the command parser and Host agree on which setting wins |
 | `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
+| `test/sidebar-tab.mjs` | Every sidebar type and its pane body register under one identity (so a restored tab renders), and the automatic status probe renders no chat row while an explicit command still does |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
 | `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
-| `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, and a warm cache costs no probe |
+| `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, and a warm cache costs no probe |
 
 They load the shipped `client.js` and read its dictionaries, so a renamed key or a
 changed default fails here rather than in the browser. The client publishes its
@@ -332,7 +333,7 @@ The tab is registered the way DSH's own sidebar features register theirs:
 | Piece | What it is |
 |---|---|
 | `ctx.get('sidebarRight')`, `ctx.get('sidebarRightTabs')` | The dock's two services, looked up through `ctx.get` and **never** read as properties. Cordis answers a read of an undeclared service with `cannot get property "sidebarRight" without inject`, and a plugin that throws while activating takes its fiber down with it — which is how an optional extra stops the client from booting. `ctx.get` returns `undefined` instead, and then there is simply no tab to add. |
-| `ctx.sidebarRightTabs.register({ id, kind, priority: 'extension', title })` | The tab type. `id` is the implementation's identity — the package name — and is also the key the body and chip are registered under. A `kind` carries at most one `extension` beside the builtin one. |
+| `ctx.sidebarRightTabs.register({ id, kind, priority: 'extension', title })` | The tab type. `id` is also the key the body and chip are registered under, and it is deliberately **the same string as `kind`**. The dock dispatches under `definition.id` but falls back to `tab.kind` while a restored tab's definition is not registered yet; two different strings make that fallback miss the body and show the dock's "nothing can view this" message. A `kind` carries at most one `extension` beside the builtin one. |
 | `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id, locale, inject }, Body)` | The pane body. It receives the session's standard props, which is how it knows which workspace to check. |
 | `ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, Chip)` | The tab chip. |
 | `ctx.sidebarRight.openTab(kind)` | How the menu gets there — the dock's own controller, and the reason the panel expands when it opens. |
@@ -344,34 +345,38 @@ menu entry and a warning, never the boot. Four states are asserted — a dock th
 present, one that is absent, one that refuses, and a context that throws on any read
 of an undeclared service.
 
-### Why a check leaves a row, and how to stop it
+### Why a check writes a command event, and why it no longer shows a row
 
 There is exactly **one** channel from the Client half to the Host: the Remote
 command namespace. `commands.execute` appends a `command/run` / `command/done`
-pair to the session before and after the handler runs, unconditionally.
+pair to the session before and after the handler runs, unconditionally. That
+event remains in the session log and is replayed on reload.
 
-**Nothing a plugin can do removes that row.** The evidence, from this DSH
-version's own source: `execute` appends both events before any definition is
-consulted; the only recording switch a command definition may declare is
-`recordInput: false`, which hides the *arguments* and nothing else; the namespace's
-Remote surface is `list` and `execute`, with no silent variant; `CommandSourceMap`
-declares one source kind (`user`); and the row is rendered by the Chat target's own
-event Definitions, which a plugin cannot suppress. So the row is a given, and the
-plugin's only lever is its **size and frequency** — which is what everything below
-is about.
+**The row, however, is not forced.** The Chat target dispatches every command row
+to its `conversation.chat.commandview` seat by command name. This plugin owns the
+`github` seat: a successful automatic `status --json` probe renders **nothing**,
+while a failed probe keeps its reason and an explicit `/github pull`,
+`/github commit`, or typed `/github status` keeps a compact row with its outcome.
+So the background check no longer leaves JSON above the composer, but a deliberate
+command — or a check that failed — is still readable in the transcript. In the
+sidebar, the pane's bottom line states when it last checked and what it saw.
+
+Suppressing the row does not suppress the **event**: the session log still carries
+`command/run`/`command/done`, so the probe's size and frequency still matter for
+log size and replay — which is what the rest of this section is about.
 
 | Lever | What it does |
 |---|---|
-| `statusOnMount: true` (default) | The workspace is checked when a session appears, so the sync badge is live without opening anything. One row per session. |
-| `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened stays clean — this is the one switch that removes a row outright. |
+| `statusOnMount: true` (default) | The workspace is checked when a session appears, so the sync badge is live without opening anything. One event pair per session, not rendered in chat. |
+| `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened writes no probe event. |
 | `status --json --slim` | The mount check asks for the badge's fields only: no change list, no branch list. Measured at **210 bytes** on a 21-file tree, and it does not grow with the change count. |
 | The answer carries pairs, not prose | A change is `[path, code]` and the counts are `[total, staged]`. The words a person reads are built where they are rendered, in the active language, and no field the control never reads is sent at all (`root`, `entries`, `fetchOnStatus`, and a branch's `upstream` were all dead weight). On the same 21-file tree the full answer is **762 bytes** where the old shape was 1953. |
-| **Opening the menu re-reads the panel data** | That is the one moment a person is looking at the list, so a stale list is worse than the row it costs. Only a reopen within 1.2s reuses the answer already in hand, so a double-click does not probe twice. |
+| **Opening the menu re-reads the panel data** | That is the one moment a person is looking at the list, so a stale list is worse than the event it costs. Only a reopen within 1.2s reuses the answer already in hand, so a double-click does not probe twice. |
 | **Returning to the window refreshes quietly** | Files change while the window is not looking — an editor outside DSH, a build, a `git switch` in a terminal. A `focus` on the window refreshes when the last answer is older than 20s, and announces no failure: a background check must never replace the menu with an error nobody asked for. |
 | Read-only actions mostly do not re-check | `changes`, `status`, and `auth` cannot alter what the probe reports, so they do not trigger one. `diff` does refresh afterwards, because that click is the person asking to see the current state. |
 
 Those two moments are the whole refresh policy. A timer was rejected on purpose:
-it would spend a logged row every time it fired whether or not anything had
+it would write a command event every time it fired whether or not anything had
 changed. DSH's own `workspaceFiles.changes` stream was considered too, and it
 watches **one directory's direct entries** — an edit inside a subdirectory does
 not notify it — so it would have added a client dependency for partial coverage of
@@ -484,6 +489,10 @@ Two behaviours exist because the alternative was a panel that lost its content:
   else refreshed it.
 - A slim answer never replaces a full one in the cache. It is a smaller answer to
   the same question; letting it overwrite the lists emptied them.
+- The surface that queued the full request is **woken** when the answer lands. The
+  queued command runs in the other surface's closure, so its `setBusy` only
+  re-renders that other component; without the wake-up the sidebar pane sat on
+  *Checking this workspace…* with a usable answer already in the cache.
 
 ### Staying open
 

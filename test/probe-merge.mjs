@@ -163,6 +163,7 @@ console.log('=== a full request while a slim check is in flight is queued, not d
   // dropped: without it the panel draws from an answer that has no lists.
   await renderOnce(state, 'pane')
   console.log('issued after the panel mount:', JSON.stringify(state.issued))
+  ok('the panel is registered as waiting for the queued answer', internals.probeWakeups.get('s1')?.size === 1, [...(internals.probeWakeups.get('s1') ?? [])])
 
   // Let the slim answer land, then the queued full one.
   await settle(500)
@@ -179,6 +180,7 @@ console.log('=== a full request while a slim check is in flight is queued, not d
   }))
   ok('the change list is there', cached?.changes?.length === 2, cached?.changes)
   ok('the branch list is there', cached?.branches?.length === 1, cached?.branches)
+  ok('the waiting panel was woken, not left on checking', internals.probeWakeups.get('s1') === undefined, [...(internals.probeWakeups.get('s1') ?? [])])
 }
 
 console.log('\n=== a warm cache: the composer does not probe at all ===')

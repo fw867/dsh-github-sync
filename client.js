@@ -22,13 +22,18 @@ window.__ModuleLoader__.load({
     /**
      * The right sidebar tab this plugin adds.
      *
-     * `id` is the implementation's identity in the tab system — it is unique
-     * across every registration, and it is also the key the pane body and its chip
-     * title are registered under. `kind` is the page type the navigation
-     * controller opens. The package name is the natural `id`.
+     * `id` is also the key the pane body and its chip title are registered under;
+     * `kind` is the page type the navigation controller opens. They are kept
+     * **equal** on purpose. The dock dispatches a tab body under `definition.id`,
+     * but falls back to `tab.kind` while that definition is not registered — a
+     * restored tab is mounted before its plugin's effect runs, and a listener that
+     * throws or is re-registered takes the definition away for a moment. With two
+     * different strings that fallback looks up a key nobody registered, and the
+     * pane shows the dock's "nothing can view this" message. One string makes a
+     * restored tab render in every one of those states.
      */
-    const SIDEBAR_ID = 'dsh-github-sync'
-    const SIDEBAR_KIND = 'github-sync'
+    const SIDEBAR_ID = 'github-sync'
+    const SIDEBAR_KIND = SIDEBAR_ID
 
     /**
      * The second tab this plugin adds: one file's patch, on its own.
@@ -42,8 +47,10 @@ window.__ModuleLoader__.load({
      * recorded under the address, so two files are two tabs, and `title(address)`
      * is captured when the tab mints — which is how the chip can name the file.
      */
-    const DIFF_ID = 'dsh-github-sync/diff'
-    const DIFF_KIND = 'github-sync-diff'
+    // Same identity/kind rule as the repository tab: a restored diff tab must
+    // find its body even while its type definition is not registered yet.
+    const DIFF_ID = 'github-sync-diff'
+    const DIFF_KIND = DIFF_ID
     const DIFF_PREFIX = 'dsh-resource://github-diff/'
 
     /** English copy; the locale service always falls back here. */
@@ -116,6 +123,7 @@ window.__ModuleLoader__.load({
       'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
       'integrate.hint':
         'Commit & push rebases local commits onto the upstream first. A conflict aborts the rebase and pushes nothing.',
+      'log.lastCheck': 'Last check',
       'commit.step': '{action} · {count} path(s) will be recorded',
       'commit.confirm': 'Record commit',
       'commit.confirmPush': 'Confirm & push',
@@ -220,6 +228,7 @@ window.__ModuleLoader__.load({
       'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
       'integrate.hint': '“提交并推送”会先把本地提交 rebase（变基）到上游。发生冲突时会中止变基，不会推送。',
+      'log.lastCheck': '最近检查',
       'commit.step': '{action} · 将记录 {count} 个路径',
       'commit.confirm': '确认提交',
       'commit.confirmPush': '确认推送',
@@ -332,6 +341,38 @@ window.__ModuleLoader__.load({
 
     /** Sessions whose full answer was requested while a slim one was in flight. */
     const probeQueuedFull = new Set()
+
+    /**
+     * Components waiting for a probe they did not run.
+     *
+     * The probe cache is shared by the composer and the sidebar pane, but the
+     * component that issued a queued fan-out is the one whose `setBusy` runs. The
+     * other instance otherwise never re-renders, so it sits on *Checking this
+     * workspace…* with an answer already in the cache. Each waiter is a state
+     * poke, run once the cache has the answer.
+     */
+    const probeWakeups = new Map()
+
+    /** Remember a component that must re-read the cache when this probe lands. */
+    const waitForProbe = (address, wake) => {
+      const waiting = probeWakeups.get(address) ?? new Set()
+      waiting.add(wake)
+      probeWakeups.set(address, waiting)
+    }
+
+    /** Re-render every component that was waiting on `address`, once. */
+    const wakeProbes = (address) => {
+      const waiting = probeWakeups.get(address)
+      if (waiting === undefined) return
+      probeWakeups.delete(address)
+      for (const wake of waiting) {
+        try {
+          wake()
+        } catch {
+          // A component unmounted between the probe and its wake-up.
+        }
+      }
+    }
 
     /** How long a full answer may be reused by a reopen, in milliseconds. */
     const OPEN_REUSE_MS = 1200
@@ -479,6 +520,7 @@ window.__ModuleLoader__.load({
         pendingDiff,
         probeCache,
         probeShape,
+        probeWakeups,
         targetChoice,
         parseUnifiedDiff,
         DiffView,
@@ -560,7 +602,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r37'
+    const BUILD = 'r42'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -730,6 +772,41 @@ window.__ModuleLoader__.load({
         overflowWrap: 'anywhere',
       },
       outputError: { color: 'var(--dsw-alias-state-error-primary)' },
+      /** The compact chat row kept for an explicit `/github` command. */
+      commandRow: {
+        boxSizing: 'border-box',
+        padding: '2px 0',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
+      commandLine: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      },
+      commandOutput: {
+        margin: '2px 0 0',
+        maxHeight: 160,
+        overflow: 'auto',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontSize: 11,
+        lineHeight: '16px',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        overflowWrap: 'anywhere',
+      },
+      /** Pinned to the bottom of the sidebar pane: the status the probe would
+       * formerly print as a JSON row above the composer. */
+      logFooter: {
+        marginTop: 'auto',
+        padding: '6px 8px 2px',
+        borderTop: '0.5px solid var(--dsw-alias-border-l1)',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 11,
+        lineHeight: '16px',
+      },
       chips: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, padding: '2px 8px' },
       chip: {
         flex: '0 0 auto',
@@ -1295,6 +1372,36 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The chat row for one `/github` command.
+     *
+     * The status probe is background work. The sidebar shows its answer, and
+     * leaving the probe's JSON in the conversation puts a machine-readable row
+     * above the composer every time a session or the pane is opened. Those rows
+     * are hidden here; an explicit command keeps a compact row with its outcome,
+     * so a typed `/github pull` is still readable in the transcript.
+     */
+    function GithubCommandRow({ node }) {
+      // The chat passes the command object itself through `node`; accepting a
+      // wrapped `{ data }` too keeps the component harmless to either shape.
+      const command = node?.data ?? node
+      const args = typeof command?.args === 'string' ? command.args : ''
+      // `status --json` is the control's probe. A successful one is background
+      // work and has its own line in the pane; a failed one is not silent — its
+      // reason stays in the transcript. A typed `status` without --json is a
+      // deliberate read and stays visible either way.
+      const outcome = command?.outcome
+      if (/\bstatus\b[^\n]*--json/.test(args) && (outcome === null || outcome?.kind === 'success')) return null
+      return React.createElement(
+        'div',
+        { style: S.commandRow },
+        React.createElement('div', { style: S.commandLine }, `/github ${args.trim()}`.trim()),
+        typeof outcome?.text === 'string' && outcome.text.length > 0
+          ? React.createElement('pre', { style: S.commandOutput }, outcome.text)
+          : null,
+      )
+    }
+
+    /**
      * Button plus action menu.
      *
      * @param props - slot props; `sessionId`, the injected `remote`, and the
@@ -1319,6 +1426,9 @@ window.__ModuleLoader__.load({
       // `undefined` means "follow the deployment setting", which arrives with the
       // probe; a boolean is a click that deliberately differs from it.
       const [integrateChoice, setIntegrateChoice] = React.useState(() => readIntegratePreference())
+      // A counter whose only job is to re-render a component that was waiting on a
+      // probe issued by another surface. See `waitForProbe` above.
+      const [, setProbeRevision] = React.useState(0)
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
@@ -1452,7 +1562,18 @@ window.__ModuleLoader__.load({
           // list until something else refreshed it. That is the shape of "the menu
           // lost its content". So it is queued and replayed once the address is
           // free — one extra logged command, but only when both really want it.
-          if (wantFull && running === 'slim') probeQueuedFull.add(address)
+          if (wantFull) {
+            if (running === 'slim') probeQueuedFull.add(address)
+            // The queued probe runs in the *other* component's closure. Wake this
+            // one after it lands, or it stays on "checking" while the answer sits
+            // in the shared cache.
+            waitForProbe(address, () => {
+              setBusy(null)
+              setActionBusy(null)
+              if (probeCache.has(address)) setProbeError(null)
+              setProbeRevision((value) => value + 1)
+            })
+          }
           return
         }
         probeInFlight.set(address, wantFull ? 'full' : 'slim')
@@ -1484,6 +1605,10 @@ window.__ModuleLoader__.load({
           if (probeQueuedFull.delete(address)) {
             // Quiet: the caller that queued this already reported its own failures.
             void refresh(address, false, {})
+          } else {
+            // This probe was not followed by a queued one, so it is the answer the
+            // waiters are waiting for.
+            wakeProbes(address)
           }
         }
       }
@@ -1838,6 +1963,10 @@ window.__ModuleLoader__.load({
         rememberIntegratePreference(next)
       }
       const info = describe(probe, t)
+      // The last full check, used by the pane's bottom line. The probe command
+      // itself no longer leaves a JSON row in the conversation, so this is where
+      // the pane states when it last looked and what it saw.
+      const lastCheck = sessionId === undefined ? undefined : probeFresh.get(sessionId)
 
       // Where this session's actions point. The Host reports which workspace
       // subdirectories are repositories and which one it is currently looking
@@ -2617,6 +2746,16 @@ window.__ModuleLoader__.load({
                   )
                 : React.createElement(DiffView, { key: 'diff', patch, t })
             })(),
+        // The one line that replaces the probe row the chat no longer shows.
+        surface === 'pane' && isRepo && lastCheck !== undefined
+          ? React.createElement(
+              'div',
+              { key: 'log-footer', style: S.logFooter },
+              `${t('log.lastCheck')} ${new Date(lastCheck).toLocaleTimeString()} · ${
+                typeof probe?.branch === 'string' && probe.branch.length > 0 ? probe.branch : 'GitHub'
+              } · ${probe?.dirty === true ? t('state.dirty') : t('state.clean')}`,
+            )
+          : null,
       ]
 
       // The sidebar pane: the same panel as a column of the page, with no popup to
@@ -2663,6 +2802,15 @@ window.__ModuleLoader__.load({
         // active locale selects between them, and English is the fallback for
         // any locale this plugin does not translate.
         ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { en: EN, zh: ZH }))
+        // The chat target dispatches each command row to this seat by command
+        // name. Owning the `github` row is what lets the automatic status probe
+        // stay out of the conversation while an explicit command remains.
+        ctx.slots.inject('conversation.chat.commandview', () =>
+          ctx.slots.register(
+            { name: 'conversation.chat.commandview', key: 'github', locale: LOCALE_NAMESPACE },
+            GithubCommandRow,
+          ),
+        )
         // The dock's services are looked up through `ctx.get`, never read as
         // properties. Cordis answers a read of an undeclared service with a throw
         // (`cannot get property "sidebarRight" without inject`), and a plugin that
