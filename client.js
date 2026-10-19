@@ -62,6 +62,8 @@ window.__ModuleLoader__.load({
       'action.retry': 'Check again',
       'action.refresh': 'Refresh',
       'sidebar.open': 'Open in the sidebar',
+      'autoOpen.label': 'Open with the session',
+      'autoOpen.hint': 'Expand this panel when you switch to a session that is a repository.',
       'sidebar.title': 'GitHub',
       'menu.checking': 'Checking this workspace…',
       'menu.found': 'Repository detected.',
@@ -161,6 +163,8 @@ window.__ModuleLoader__.load({
       'action.retry': '重新检查',
       'action.refresh': '刷新',
       'sidebar.open': '在侧栏打开',
+      'autoOpen.label': '打开会话时自动展开',
+      'autoOpen.hint': '切换到属于仓库的会话时，自动展开这个面板。',
       'sidebar.title': 'GitHub',
       'menu.checking': '正在检查当前工作区…',
       'menu.found': '已检测到 Git 仓库。',
@@ -312,8 +316,15 @@ window.__ModuleLoader__.load({
      * A probe that never answers writes nothing to either map, so the freshness
      * windows alone would let a second open start a second probe behind the first.
      * This is the in-flight gate; the windows are the reuse gate.
+     *
+     * It maps a session to the shape being fetched, not just its presence: a full
+     * request that arrives during a slim one has to be remembered and replayed,
+     * because dropping it leaves the panel with an answer that has no lists.
      */
-    const probeInFlight = new Set()
+    const probeInFlight = new Map()
+
+    /** Sessions whose full answer was requested while a slim one was in flight. */
+    const probeQueuedFull = new Set()
 
     /** How long a full answer may be reused by a reopen, in milliseconds. */
     const OPEN_REUSE_MS = 1200
@@ -342,6 +353,36 @@ window.__ModuleLoader__.load({
         window.localStorage?.setItem(STATUS_ON_MOUNT_KEY, value ? 'true' : 'false')
       } catch {
         // A browser that refuses storage simply pays the first check again.
+      }
+    }
+
+    /**
+     * Where "open the panel with the session" survives a page reload.
+     *
+     * Every session's sidebar starts collapsed — that is the product's rule, not
+     * this plugin's — so a panel that stayed open in one session does not follow
+     * you into the next one. For a control whose whole point is a permanent column
+     * that is the wrong default, so this one is remembered in the browser: the
+     * choice is the person's, and it has to outlast the tab.
+     */
+    const AUTO_OPEN_KEY = 'dsh-github-sync:auto-open'
+
+    /** Whether switching to a repository session should expand the sidebar. */
+    const readAutoOpen = () => {
+      try {
+        const raw = window.localStorage?.getItem(AUTO_OPEN_KEY)
+        return raw === null || raw === undefined ? true : raw === 'true'
+      } catch {
+        return true
+      }
+    }
+
+    /** Remember the choice for the next page load. */
+    const rememberAutoOpen = (value) => {
+      try {
+        window.localStorage?.setItem(AUTO_OPEN_KEY, value ? 'true' : 'false')
+      } catch {
+        // A browser that refuses storage keeps the default for this page only.
       }
     }
 
@@ -480,7 +521,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r33'
+    const BUILD = 'r35'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1230,6 +1271,11 @@ window.__ModuleLoader__.load({
       const surface = props.surface === 'pane' ? 'pane' : 'menu'
       const openSidebar = typeof props.openSidebar === 'function' ? props.openSidebar : null
       const openDiffTab = typeof props.openDiffTab === 'function' ? props.openDiffTab : null
+      // Whether this session's column is currently showing its panel. Read through
+      // a function rather than a value, because it is asked at the moment a session
+      // appears and a captured boolean would be the previous session's answer.
+      const sidebarExpanded = typeof props.sidebarExpanded === 'function' ? props.sidebarExpanded : null
+      const [autoOpen, setAutoOpen] = React.useState(() => readAutoOpen())
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
@@ -1354,8 +1400,19 @@ window.__ModuleLoader__.load({
       const refresh = async (targetSession, announceFailure, options) => {
         const address = targetSession ?? sessionId
         if (address === undefined) return
-        if (probeInFlight.has(address)) return
-        probeInFlight.add(address)
+        const wantFull = options?.slim !== true
+        const running = probeInFlight.get(address)
+        if (running !== undefined) {
+          // A full request that arrives while a slim check runs must not be
+          // dropped: the slim answer has no change or branch lists, the effect that
+          // asked is not going to ask again, and the panel would sit with an empty
+          // list until something else refreshed it. That is the shape of "the menu
+          // lost its content". So it is queued and replayed once the address is
+          // free — one extra logged command, but only when both really want it.
+          if (wantFull && running === 'slim') probeQueuedFull.add(address)
+          return
+        }
+        probeInFlight.set(address, wantFull ? 'full' : 'slim')
         const controller = new AbortController()
         const expired = new Promise((resolve) => {
           controller.signal.addEventListener('abort', () => resolve(PROBE_TIMEOUT), { once: true })
@@ -1381,6 +1438,10 @@ window.__ModuleLoader__.load({
         } finally {
           clearTimeout(timer)
           probeInFlight.delete(address)
+          if (probeQueuedFull.delete(address)) {
+            // Quiet: the caller that queued this already reported its own failures.
+            void refresh(address, false, {})
+          }
         }
       }
 
@@ -1434,8 +1495,24 @@ window.__ModuleLoader__.load({
         }
         try {
           const parsed = JSON.parse(outcome.text)
-          probeCache.set(address, parsed)
-          probeShape.set(address, slim ? 'slim' : 'full')
+          // A slim answer carries no lists, so it must not replace a full one: the
+          // mount check can land *after* the panel's own probe, and overwriting the
+          // change list with `[]` is exactly how the panel's content vanished while
+          // it was being read. The rest of the slim answer is newer and worth
+          // keeping; only the lists stay with the fuller answer.
+          const previous = probeCache.get(address) ?? {}
+          if (slim === true && probeShape.get(address) === 'full') {
+            probeCache.set(address, {
+              ...parsed,
+              ...(previous.changes === undefined ? {} : { changes: previous.changes }),
+              ...(previous.branches === undefined ? {} : { branches: previous.branches }),
+              ...(previous.changesTruncated === undefined ? {} : { changesTruncated: previous.changesTruncated }),
+              ...(previous.branchesTruncated === undefined ? {} : { branchesTruncated: previous.branchesTruncated }),
+            })
+          } else {
+            probeCache.set(address, parsed)
+            probeShape.set(address, slim ? 'slim' : 'full')
+          }
           if (slim !== true) probeFresh.set(address, Date.now())
           // The answer carries the deployment's eager-check preference; remember
           // it for the sessions created afterwards, and for the next page load.
@@ -1478,6 +1555,9 @@ window.__ModuleLoader__.load({
       // The mount answer is asked for slim: it runs for every session, and the
       // badge it feeds needs the branch and the drift, not the change list.
       React.useEffect(() => {
+        // The pane asks for the full answer on mount, so a slim probe here would be
+        // a second logged command for the same panel.
+        if (surface === 'pane') return undefined
         if (sessionId === undefined || !eagerAllowed) return undefined
         if (probeCache.has(sessionId) || probeAttempted.has(sessionId)) return undefined
         probeAttempted.add(sessionId)
@@ -1506,6 +1586,10 @@ window.__ModuleLoader__.load({
       // a full one older than OPEN_REUSE_MS is replaced rather than shown stale.
       // Only a second look within that window reuses: closing and reopening the
       // menu in one breath must not append two probe rows.
+      //
+      // The pane does not take the eager slim probe below: it is about to ask for
+      // the full answer, and paying two logged commands to draw one panel is exactly
+      // the kind of noise the sidebar-only setup is trying to avoid.
       const wantsData = open || surface === 'pane'
       React.useEffect(() => {
         if (!wantsData || sessionId === undefined) return undefined
@@ -1548,6 +1632,7 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sessionId])
 
+
       // The action result belongs to the interaction that produced it. Closing the
       // menu clears it, so the next open starts from the same place every time
       // instead of showing what the previous visit printed. The sidebar pane is
@@ -1587,9 +1672,12 @@ window.__ModuleLoader__.load({
       }, [surface, sessionId])
 
       // Dismiss the menu on the interactions that mean "I am done here": Escape,
-      // a press anywhere outside the control, focus moving out of it, or the
-      // window losing focus. A popup that survives a click elsewhere covers the
-      // thing the person just clicked, which is why this is not optional.
+      // a press anywhere outside the control, or focus moving out of it.
+      //
+      // A focus change to another *application* is not one of those. The window's
+      // `blur` fires when a notification, a taskbar click, or DevTools takes focus,
+      // and closing on it makes the menu vanish while the person is still using it —
+      // which is the one behaviour people notice, and it is avoidable.
       React.useEffect(() => {
         if (!open) return undefined
         const onKey = (event) => {
@@ -1617,20 +1705,17 @@ window.__ModuleLoader__.load({
         const onFocusIn = (event) => {
           if (!inside(event.target)) setOpen(false)
         }
-        const onWindowBlur = () => setOpen(false)
         // Capture, because a press handled by something below must still dismiss
         // this first: the menu is drawn over whatever it covers.
         document.addEventListener('keydown', onKey)
         document.addEventListener('pointerdown', onPointerDown, true)
         document.addEventListener('mousedown', onPointerDown, true)
         document.addEventListener('focusin', onFocusIn)
-        window.addEventListener('blur', onWindowBlur)
         return () => {
           document.removeEventListener('keydown', onKey)
           document.removeEventListener('pointerdown', onPointerDown, true)
           document.removeEventListener('mousedown', onPointerDown, true)
           document.removeEventListener('focusin', onFocusIn)
-          window.removeEventListener('blur', onWindowBlur)
         }
       }, [open, pendingAction])
 
@@ -1642,6 +1727,43 @@ window.__ModuleLoader__.load({
           ? { state: 'empty', workspace: null, detail: t('note.noWorkspace') }
           : (probeCache.get(sessionId) ?? null)
       const isRepo = probe?.state === 'repo'
+      // Bring the panel with you. Every session's column starts collapsed — that is
+      // the product's rule — so a panel left open in one session is simply gone in
+      // the next, which for a column reads as "it closed itself". Three conditions
+      // keep that from becoming a nuisance:
+      //
+      // - only a repository session is opened: the panel has nothing to offer in a
+      //   workspace that is not one, and taking the sidebar for empty content is
+      //   worse than leaving it shut;
+      // - only a *collapsed* column is opened: an expanded one may be showing
+      //   another plugin's tab, and stealing its focus on every switch is not what
+      //   "open with the session" means;
+      // - the choice is the person's, and it outlives the page.
+      React.useEffect(() => {
+        if (surface === 'pane' || !autoOpen) return undefined
+        if (sessionId === undefined || probe?.state !== 'repo') return undefined
+        if (openSidebar === null || sidebarExpanded === null) return undefined
+        let cancelled = false
+        let timer = null
+        const attempt = (retried) => {
+          if (cancelled) return
+          try {
+            if (sidebarExpanded() === true) return
+            openSidebar()
+          } catch {
+            // The column's store for a session is minted as that session renders, so
+            // a call made in the same commit can arrive before it exists. One retry
+            // covers that; anything else is left to the person.
+            if (!retried) timer = setTimeout(() => attempt(true), 300)
+          }
+        }
+        timer = setTimeout(() => attempt(false), 0)
+        return () => {
+          cancelled = true
+          if (timer !== null) clearTimeout(timer)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [surface, autoOpen, sessionId, probe?.state])
       // A repository created with `init` has no remote, and offering it "push"
       // is a dead end: the action can only fail. The check reports the remote as
       // `null` when there is none and as a URL when there is one, so only a
@@ -2331,6 +2453,31 @@ window.__ModuleLoader__.load({
               t('sidebar.open'),
             )
           : null,
+        // Whether the panel comes along to the next repository session. Offered on
+        // both surfaces, because it is a property of the plugin rather than of the
+        // interaction, and stated the way the marker chips are: ticked means on.
+        openSidebar !== null
+          ? React.createElement(
+              'div',
+              { key: 'auto-open', style: S.markerSummary },
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  role: 'menuitemcheckbox',
+                  'aria-checked': autoOpen,
+                  title: t('autoOpen.hint'),
+                  style: style(S.chip, autoOpen ? S.chipOn : undefined),
+                  onClick: () => {
+                    const next = autoOpen !== true
+                    setAutoOpen(next)
+                    rememberAutoOpen(next)
+                  },
+                },
+                autoOpen ? `✓ ${t('autoOpen.label')}` : t('autoOpen.label'),
+              ),
+            )
+          : null,
         output === null
           ? null
           : (() => {
@@ -2430,6 +2577,10 @@ window.__ModuleLoader__.load({
                 id: SIDEBAR_ID,
                 kind: SIDEBAR_KIND,
                 priority: 'extension',
+                // Retained while another tab is in front: the panel holds the
+                // action result, the ticked markers and a half-entered commit, and
+                // none of that should be lost by looking at another tab and back.
+                keepMounted: true,
                 title: () => ctx.locale.bind(LOCALE_NAMESPACE)('sidebar.title'),
               })
               sidebarReady = true
@@ -2471,6 +2622,9 @@ window.__ModuleLoader__.load({
                 kind: DIFF_KIND,
                 priority: 'extension',
                 patterns: [`${DIFF_PREFIX}**`],
+                // A patch is read against another patch, so switching to the
+                // change list and back must not re-run the diff — or lose it.
+                keepMounted: true,
                 title: (address) =>
                   ctx.locale.bind(LOCALE_NAMESPACE)('diff.tabTitle', { path: diffPathOf(address) ?? '' }),
               })
@@ -2523,7 +2677,22 @@ window.__ModuleLoader__.load({
               inject: () => ({
                 remote: ctx.remote,
                 surface: 'menu',
-                ...(sidebarReady ? { openSidebar } : {}),
+                ...(sidebarReady
+                  ? {
+                      openSidebar,
+                      // Asked at the moment a session appears, so it is a call and
+                      // not a captured value: a boolean would be the previous
+                      // session's answer. A deployment without the controller keeps
+                      // the menu's own way in.
+                      sidebarExpanded: () => {
+                        try {
+                          return sidebar.isExpanded() === true
+                        } catch {
+                          return false
+                        }
+                      },
+                    }
+                  : {}),
                 ...(diffReady ? { openDiffTab } : {}),
               }),
             },

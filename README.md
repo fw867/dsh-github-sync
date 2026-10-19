@@ -430,6 +430,67 @@ A directory that does not exist is refused with its path, before any git command
 runs: handing git a missing directory produces only a bare `spawn git ENOENT`
 that names neither the directory nor the problem.
 
+### What a check costs, per surface
+
+Every workspace check is a `/github status --json` command, and the Host appends
+every command to the session log — that is the only Client-to-Host channel, so a
+check is a visible row in the conversation. The cost is therefore measurable:
+
+| Surface | Rows |
+|---|---|
+| Composer button mounts | 1 slim (`--slim`: branch and drift, no lists) |
+| The menu is opened | 1 full, unless a full answer is under 1.2 s old |
+| The sidebar pane is shown | 1 full, then reused while fresh |
+| The window regains focus | 1 full, at most once per 20 s |
+
+**So removing the composer button does not make the rows disappear** — the pane
+still checks once when it is shown. What it removes is the *per-session* check that
+happens whether or not anything is opened. A sidebar-only deployment pays its one
+row when the tab is opened, and nothing while it is closed.
+
+Two behaviours exist because the alternative was a panel that lost its content:
+
+- A full request that arrives while a slim check is in flight is **queued**, not
+  dropped. The slim answer has no change or branch list and the effect that asked
+  is not going to ask again, so dropping it left the panel empty until something
+  else refreshed it.
+- A slim answer never replaces a full one in the cache. It is a smaller answer to
+  the same question; letting it overwrite the lists emptied them.
+
+### Staying open
+
+The sidebar tab registers with `keepMounted`, so switching to another tab and back
+does not rebuild it — the action result, the ticked markers and a half-entered
+commit survive. The composer popup is a popup and still closes on an outside press
+or Escape, but it no longer closes when another application takes focus: a
+notification or a taskbar click used to make it vanish while it was being used.
+
+### Coming along to the next session
+
+Every session's right sidebar starts **collapsed** — that is the product's rule, not
+this plugin's — so a panel left open in one conversation is simply gone in the next.
+For a control whose whole point is a permanent column that reads as "it closed
+itself". *Open with the session* (on by default, and remembered in the browser)
+expands the panel when you switch to a session that is a repository.
+
+It stays narrow on purpose:
+
+| Situation | What happens |
+|---|---|
+| Repository session, column collapsed | The panel opens |
+| Repository session, column expanded | Left alone — it may be showing another plugin's tab |
+| Workspace is not a repository | Left alone — there is nothing to show |
+| The preference is off | Never opens |
+
+Whether a session is a repository comes from the workspace check, so a deployment
+that sets `statusOnMount: false` and never opens the panel manually will not see it
+open: the plugin does not spend a logged command purely to decide whether to expand
+a column. The default (`true`) means the mount check answers before the first
+switch.
+
+The call is also retried once: a session's store is minted as that session renders,
+so an expansion requested in the same commit can arrive before the store exists.
+
 ### Pointing the control at a subdirectory
 
 `findRepositoryRoot` walks **upward**, so a repository that lives *below* the

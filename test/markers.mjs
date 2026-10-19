@@ -137,16 +137,15 @@ function boot() {
 
 /** Open the menu, enter the commit step, act, confirm. */
 async function enterStep(state) {
-  const { Component, props, backing, S } = state
-  const tree = { effects: [] }
-  state.inst = tree
+  const { Component, props, S } = state
+  // useEffect collects into state.effects; draining any other array runs nothing.
+  state.effects.length = 0
   S.index = 0
   let node = Component(props)
-  backing[0].value = true
   const render = async (rounds = 3) => {
     for (let i = 0; i < rounds; i += 1) {
-      const effects = tree.effects.slice()
-      tree.effects = []
+      const effects = state.effects.slice()
+      state.effects = []
       for (const e of effects) e()
       await settle()
       S.index = 0
@@ -156,6 +155,13 @@ async function enterStep(state) {
     node = Component(props)
     return node
   }
+  node = await render()
+  // The panel only renders while the popup is open, so the control is pressed the
+  // way a person presses it. Setting a state slot by index would depend on the
+  // hook order, which is not part of what this file is testing.
+  const trigger = collect(node, (n) => n.type === 'button' && n.props?.['aria-haspopup'] === 'menu')[0]
+  if (trigger === undefined) throw new Error(`the control button was not found; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
+  trigger.props.onClick()
   node = await render()
   const enter = buttonNamed(node, EN['action.sync'])
   if (enter === undefined) throw new Error(`no commit button; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
@@ -254,8 +260,8 @@ console.log('\n=== the Clear control empties both the chips and the free-text fi
     S.index = 0
     let n = Component(props)
     for (let i = 0; i < 2; i += 1) {
-      const effects = state.inst.effects.slice()
-      state.inst.effects = []
+      const effects = state.effects.slice()
+      state.effects = []
       for (const e of effects) e()
       await settle()
       S.index = 0
@@ -269,14 +275,13 @@ console.log('\n=== the Clear control empties both the chips and the free-text fi
   ok('no chip is ticked', chipNamed(after, 'release') !== undefined && !textOf(chipNamed(after, 'release')).includes('✓'))
   // Re-render, then confirm: the confirming button captured before Clear still
   // closes over the markers that were selected then.
-  const fresh = state.inst
   S: {
     const { Component, props, S } = state
     S.index = 0
     let n = Component(props)
     for (let i = 0; i < 2; i += 1) {
-      const effects = fresh.effects.slice()
-      fresh.effects = []
+      const effects = state.effects.slice()
+      state.effects = []
       for (const e of effects) e()
       await settle()
       S.index = 0
