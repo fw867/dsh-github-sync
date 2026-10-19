@@ -627,7 +627,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r47'
+    const BUILD = 'r49'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -856,6 +856,13 @@ window.__ModuleLoader__.load({
         borderColor: 'var(--dsw-alias-brand-primary)',
         background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)',
         color: 'var(--dsw-alias-brand-primary)',
+        fontWeight: 600,
+      },
+      /** The auto-rebase switch reads as "green means protected" when on. */
+      chipOnGreen: {
+        borderColor: 'var(--dsw-alias-state-success-primary)',
+        background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 18%, transparent)',
+        color: 'var(--dsw-alias-state-success-primary)',
         fontWeight: 600,
       },
       /** The one chip that carries the step through: the commit itself. */
@@ -2481,7 +2488,7 @@ window.__ModuleLoader__.load({
                   'aria-checked': integrateOn,
                   title: t('integrate.hint'),
                   disabled,
-                  style: style(S.chip, integrateOn ? S.chipOn : undefined),
+                  style: style(S.chip, integrateOn ? S.chipOnGreen : undefined),
                   onClick: toggleIntegrate,
                 },
                 integrateOn ? `✓ ${t('action.integrate')}` : t('action.integrate'),
@@ -2673,6 +2680,9 @@ window.__ModuleLoader__.load({
               )
             : null,
         ),
+        // The jump to the project page belongs above the state line: it is the
+        // first thing to reach for, and it does not depend on the change list.
+        probeError === null && isRepo ? openWebItem : null,
         busy === null
           ? React.createElement(
               'div',
@@ -2725,9 +2735,6 @@ window.__ModuleLoader__.load({
         // Beside the action it modifies, and only where that action exists.
         probeError === null && isRepo ? integrateToggle : null,
         probeError === null ? integrateBehind : null,
-        // The one item that leaves DSH: it opens the repository's home page in
-        // the browser, where the sync controls have no equivalent.
-        probeError === null && isRepo ? openWebItem : null,
         // Directly under the buttons it belongs to, and only while one of them is
         // waiting to be confirmed.
         probeError === null && (probe === null || isRepo) ? commitStep : null,

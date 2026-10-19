@@ -262,6 +262,14 @@ console.log('\n=== the control renders the item from the probe ===')
   ok('it opens a new top-level context', link?.props?.target === '_blank', link?.props)
   ok('the opener cannot reach back', link?.props?.rel === 'noopener noreferrer', link?.props)
   ok('its label is the localized action', textOf(link) === EN['action.openWeb'], textOf(link))
+  const children = Array.isArray(node?.children) ? node.children : []
+  const linkIndex = children.findIndex((child) => child.type === 'a' && child.props?.href === PROBE.web)
+  const stateIndex = children.findIndex((child) => textOf(child).includes(EN['menu.found']))
+  ok(
+    'the jump sits above the repository-detected line',
+    linkIndex >= 0 && stateIndex >= 0 && linkIndex < stateIndex,
+    { linkIndex, stateIndex },
+  )
 
   const noWeb = boot({ ...PROBE, remote: '/srv/git/widget.git', web: null })
   const noWebNode = await mountPane(noWeb)

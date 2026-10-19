@@ -243,6 +243,11 @@ console.log('\n=== the switch is visible, reflects a config of false, and is rem
   await menu.click(toggle)
   toggle = integrateToggleOf(menu.node())
   ok('a click checks it', toggle?.props?.['aria-checked'] === true, toggle?.props?.['aria-checked'])
+  ok(
+    'the on state is green',
+    String(toggle?.props?.style?.background ?? '').includes('state-success-primary'),
+    toggle?.props?.style,
+  )
   ok('the choice is written for the next page', store.getItem('dsh-github-sync:integrate-before-push') === 'true', store.raw)
 
   await menu.enterSyncStep()
