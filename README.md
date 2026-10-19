@@ -269,7 +269,7 @@ Each file is self-contained:
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | The auto-rebase switch: it starts from the config, a click is remembered and travels as `--integrate`/`--no-integrate`, and the command parser and Host agree on which setting wins |
 | `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
-| `test/sidebar-tab.mjs` | Every sidebar type and its pane body register under one identity (so a restored tab renders), and the automatic status probe renders no chat row while an explicit command still does |
+| `test/sidebar-tab.mjs` | Every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
 | `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
 | `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, and a warm cache costs no probe |
@@ -354,12 +354,12 @@ event remains in the session log and is replayed on reload.
 
 **The row, however, is not forced.** The Chat target dispatches every command row
 to its `conversation.chat.commandview` seat by command name. This plugin owns the
-`github` seat: a successful automatic `status --json` probe renders **nothing**,
-while a failed probe keeps its reason and an explicit `/github pull`,
-`/github commit`, or typed `/github status` keeps a compact row with its outcome.
-So the background check no longer leaves JSON above the composer, but a deliberate
-command — or a check that failed — is still readable in the transcript. In the
-sidebar, the pane's bottom line states when it last checked and what it saw.
+`github` seat: **every status read is sidebar-only** — the automatic
+`status --json` probe and a typed `/github status` alike render nothing in the
+transcript, because the pane already states the branch, the change count, and when
+it last checked. Every other `/github` command keeps one **14px line** with a
+`✓`/`✗`/`…` mark; the full outcome is in the row's hover title and in the session
+log, so the transcript never grows a second copy of an answer.
 
 Suppressing the row does not suppress the **event**: the session log still carries
 `command/run`/`command/done`, so the probe's size and frequency still matter for

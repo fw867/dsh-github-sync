@@ -602,7 +602,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r42'
+    const BUILD = 'r43'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -772,30 +772,17 @@ window.__ModuleLoader__.load({
         overflowWrap: 'anywhere',
       },
       outputError: { color: 'var(--dsw-alias-state-error-primary)' },
-      /** The compact chat row kept for an explicit `/github` command. */
+      /** The one-line row kept for an explicit `/github` command. */
       commandRow: {
         boxSizing: 'border-box',
-        padding: '2px 0',
+        padding: 0,
+        overflow: 'hidden',
         color: 'var(--dsw-alias-label-secondary)',
-        fontSize: 11,
-        lineHeight: '16px',
-      },
-      commandLine: {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      },
-      commandOutput: {
-        margin: '2px 0 0',
-        maxHeight: 160,
-        overflow: 'auto',
-        color: 'var(--dsw-alias-label-primary)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: 11,
-        lineHeight: '16px',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        overflowWrap: 'anywhere',
+        lineHeight: '14px',
+        whiteSpace: 'nowrap',
+        textOverflow: 'ellipsis',
       },
       /** Pinned to the bottom of the sidebar pane: the status the probe would
        * formerly print as a JSON row above the composer. */
@@ -1385,19 +1372,20 @@ window.__ModuleLoader__.load({
       // wrapped `{ data }` too keeps the component harmless to either shape.
       const command = node?.data ?? node
       const args = typeof command?.args === 'string' ? command.args : ''
-      // `status --json` is the control's probe. A successful one is background
-      // work and has its own line in the pane; a failed one is not silent — its
-      // reason stays in the transcript. A typed `status` without --json is a
-      // deliberate read and stays visible either way.
+      // Every status read belongs to the sidebar: the automatic probe and a
+      // typed `/github status` alike. The pane states the branch, the change
+      // count, and when it last checked; keeping a duplicate line above the
+      // composer is the clutter this seat exists to remove.
+      if (/^\s*status\b/.test(args)) return null
       const outcome = command?.outcome
-      if (/\bstatus\b[^\n]*--json/.test(args) && (outcome === null || outcome?.kind === 'success')) return null
+      // Everything else stays one line tall. The full answer is still available
+      // on hover and in the session log, and UI actions repeat it in the pane's
+      // output block; a transcript row is not the place for a second copy.
+      const mark = outcome === null ? '…' : outcome?.kind === 'success' ? '✓' : '✗'
       return React.createElement(
         'div',
-        { style: S.commandRow },
-        React.createElement('div', { style: S.commandLine }, `/github ${args.trim()}`.trim()),
-        typeof outcome?.text === 'string' && outcome.text.length > 0
-          ? React.createElement('pre', { style: S.commandOutput }, outcome.text)
-          : null,
+        { style: S.commandRow, title: typeof outcome?.text === 'string' ? outcome.text : undefined },
+        `${mark} /github ${args.trim()}`.trim(),
       )
     }
 
