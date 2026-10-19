@@ -99,6 +99,13 @@ The menu offers:
 - **Commit & push** — stage everything, commit with a generated subject,
   integrate the upstream, push
 - **Push only** — publish the current branch
+- **Auto-rebase before push** — the switch that decides whether Commit & push
+  replays local commits onto the upstream first. It starts from
+  `integrateBeforePush`; a click is remembered in this browser and travels with
+  the sync command, so the panel and the Host cannot disagree.
+- **Open project on GitHub** — leave DSH for the repository's home page in the
+  browser. The Host derives the address from the configured remote and omits the
+  item when that remote has no browsable page (a local path, for example).
 
 ### Nothing is published on top of a moved upstream
 
@@ -124,6 +131,19 @@ integrate than be told to:
   name: 'dsh-github-sync'
   config:
     integrateBeforePush: true
+```
+
+The same choice is visible in the menu as **Auto-rebase before push**, under the
+repository actions. It starts from the deployment setting and is remembered in the
+browser; clicking it sends `--integrate` or `--no-integrate` with the next
+`/github sync`, so the command line records which choice was in force. Clicking
+back to the deployment's value forgets the browser override instead of pinning it.
+The YAML setting remains the default for model tools and for slash commands that
+do not pass a flag. On the command line the override is explicit:
+
+```
+/github sync --integrate       replay onto the upstream before pushing
+/github sync --no-integrate    do not replay, even when the config enables it
 ```
 
 With it on, a replay that conflicts is **aborted** — the repository returns to
@@ -241,12 +261,17 @@ cannot tell a marker from a bracketed word and a wrong guess would edit the mess
 pnpm test        # or: node test/run.mjs
 ```
 
-Two files, both self-contained:
+Each file is self-contained:
 
 | File | What it pins |
 |---|---|
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
+| `test/integrate-toggle.mjs` | The auto-rebase switch: it starts from the config, a click is remembered and travels as `--integrate`/`--no-integrate`, and the command parser and Host agree on which setting wins |
+| `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
+| `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
+| `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
+| `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, and a warm cache costs no probe |
 
 They load the shipped `client.js` and read its dictionaries, so a renamed key or a
 changed default fails here rather than in the browser. The client publishes its
@@ -365,7 +390,10 @@ change is a `[path, code]` pair, the counts are `[total, staged]`, and the words
 person reads (`staged added`, `modified`) are built where they are rendered, in the
 active language. Fields nothing reads are not sent at all. On a 21-file tree that
 is 762 bytes where the earlier shape was 1953, and the mount answer stays at 210
-whatever the tree holds.
+whatever the tree holds. `web` is the one added field: the repository's browsable
+home page, normalized from `remote`, or `null` when the remote has none. It is
+carried per answer rather than derived in the Client so that a git URL is
+interpreted in exactly one place.
 
 ### Keeping the counts honest
 
@@ -878,7 +906,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     statusOnMount: true       # check when a session appears, or only when opened
     changesScope: all         # all: git's view, untracked files included
     subdirectory: ''          # repository below the workspace root, when there is one
-    integrateBeforePush: false # replay local commits onto the upstream before pushing
+    integrateBeforePush: false # default for replaying local commits before push; the menu switch can override it
     timeoutMs: 600000
 ```
 
@@ -979,6 +1007,7 @@ reasoning-only answer is distinguishable from a provider that failed.
 | `message` | Commit subject used verbatim instead of generating one. |
 | `markers` | CI markers appended to the subject line after the title: `["skip ci"]` writes `feat: x [skip ci]`, `["release", "skip ci"]` writes both in that order. Plain words only, at most five, brackets optional. For `commit`, `sync`, `amend`, `init`, and `setup`. |
 | `pull` | For `sync`, pull with rebase before pushing. A failed pull stops the sync before the push. |
+| `integrate` | For `sync`, replay local commits onto the upstream before pushing (`true`) or suppress that when the config enables it (`false`). Omit to follow `integrateBeforePush`. |
 | `allowEmpty` | Allow a commit when nothing changed. |
 
 ## Error behaviour

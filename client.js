@@ -56,6 +56,8 @@ window.__ModuleLoader__.load({
       'action.commit': 'Commit locally',
       'action.sync': 'Commit & push',
       'action.push': 'Push only',
+      'action.integrate': 'Auto-rebase before push',
+      'action.openWeb': 'Open project on GitHub',
       'action.clone': 'Clone',
       'action.init': 'Create an empty repository here',
       'action.setup': 'Connect & push',
@@ -112,6 +114,8 @@ window.__ModuleLoader__.load({
       'commit.otherMarkers': 'Others',
       'commit.otherPlaceholder': 'comma separated, e.g. hotfix, deploy',
       'commit.needCustom': 'A custom message is selected but empty; type one or switch back to the generated message.',
+      'integrate.hint':
+        'Commit & push rebases local commits onto the upstream first. A conflict aborts the rebase and pushes nothing.',
       'commit.step': '{action} · {count} path(s) will be recorded',
       'commit.confirm': 'Record commit',
       'commit.confirmPush': 'Confirm & push',
@@ -157,6 +161,8 @@ window.__ModuleLoader__.load({
       'action.commit': '本地提交',
       'action.sync': '提交并推送',
       'action.push': '仅推送',
+      'action.integrate': '推送前自动变基',
+      'action.openWeb': '打开 GitHub 项目主页',
       'action.clone': '克隆',
       'action.init': '在此新建仓库',
       'action.setup': '连接并推送',
@@ -213,6 +219,7 @@ window.__ModuleLoader__.load({
       'commit.otherMarkers': '其它',
       'commit.otherPlaceholder': '逗号分隔，例如 hotfix, deploy',
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
+      'integrate.hint': '“提交并推送”会先把本地提交 rebase（变基）到上游。发生冲突时会中止变基，不会推送。',
       'commit.step': '{action} · 将记录 {count} 个路径',
       'commit.confirm': '确认提交',
       'commit.confirmPush': '确认推送',
@@ -387,6 +394,38 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Where the "auto-rebase before push" switch survives a page reload.
+     *
+     * The deployment setting is the default this starts from, delivered with a
+     * probe's answer. A click that differs from it is remembered here, and only
+     * that click changes the `/github sync` line: the switch and the config can
+     * never disagree without the command saying which one applies.
+     */
+    const INTEGRATE_KEY = 'dsh-github-sync:integrate-before-push'
+
+    /** The remembered override, or `undefined` when the deployment setting applies. */
+    const readIntegratePreference = () => {
+      try {
+        const raw = window.localStorage?.getItem(INTEGRATE_KEY)
+        if (raw === 'true') return true
+        if (raw === 'false') return false
+        return undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    /** Remember a click, or forget it when it agrees with the deployment again. */
+    const rememberIntegratePreference = (value) => {
+      try {
+        if (value === undefined) window.localStorage?.removeItem(INTEGRATE_KEY)
+        else window.localStorage?.setItem(INTEGRATE_KEY, value ? 'true' : 'false')
+      } catch {
+        // A browser that refuses storage keeps the switch for this page only.
+      }
+    }
+
+    /**
      * Whether a workspace may be checked as soon as a session appears.
      *
      * This is a deployment-wide Host setting the Client cannot read, so it
@@ -521,7 +560,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r35'
+    const BUILD = 'r37'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -592,6 +631,7 @@ window.__ModuleLoader__.load({
         fontSize: 13,
         lineHeight: '18px',
         textAlign: 'left',
+        textDecoration: 'none',
         cursor: 'pointer',
       },
       itemDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
@@ -1276,6 +1316,9 @@ window.__ModuleLoader__.load({
       // appears and a captured boolean would be the previous session's answer.
       const sidebarExpanded = typeof props.sidebarExpanded === 'function' ? props.sidebarExpanded : null
       const [autoOpen, setAutoOpen] = React.useState(() => readAutoOpen())
+      // `undefined` means "follow the deployment setting", which arrives with the
+      // probe; a boolean is a click that deliberately differs from it.
+      const [integrateChoice, setIntegrateChoice] = React.useState(() => readIntegratePreference())
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
@@ -1770,6 +1813,30 @@ window.__ModuleLoader__.load({
       // *known* absence narrows the menu — an unanswered check keeps every
       // action, which is what makes a hanging probe degrade instead of block.
       const remoteMissing = isRepo && probe?.remote === null
+      // The page the project lives at. The Host derives it from the configured
+      // remote, so a repository whose remote is a local path — or one the Host
+      // could not parse — has no item to offer rather than a link that fails.
+      const webUrl =
+        typeof probe?.web === 'string' && /^https?:\/\//i.test(probe.web) ? probe.web : null
+      // The switch starts from the deployment's setting; a click overrides it and
+      // is sent with the sync line, so the Host never has to guess which one the
+      // person meant.
+      const configuredIntegrate = probe?.integrateBeforePush === true
+      const integrateOn = integrateChoice === undefined ? configuredIntegrate : integrateChoice
+      const integrateSuffix =
+        integrateChoice === undefined ? '' : integrateChoice ? ' --integrate' : ' --no-integrate'
+      const toggleIntegrate = () => {
+        const next = integrateOn !== true
+        // Clicking back to the deployment's value forgets the override rather than
+        // pinning it: a later config change is then visible again.
+        if (next === configuredIntegrate) {
+          setIntegrateChoice(undefined)
+          rememberIntegratePreference(undefined)
+          return
+        }
+        setIntegrateChoice(next)
+        rememberIntegratePreference(next)
+      }
       const info = describe(probe, t)
 
       // Where this session's actions point. The Host reports which workspace
@@ -2240,6 +2307,56 @@ window.__ModuleLoader__.load({
         )
       })
 
+      // The switch for what Commit & push does with a moved upstream. It lives
+      // beside the actions rather than inside the commit step so it is visible
+      // before the step is entered — the whole point of a switch is to be seen.
+      const integrateToggle =
+        remoteMissing
+          ? null
+          : React.createElement(
+              'div',
+              { key: 'integrate', style: S.markerSummary },
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  role: 'menuitemcheckbox',
+                  'aria-checked': integrateOn,
+                  title: t('integrate.hint'),
+                  disabled,
+                  style: style(S.chip, integrateOn ? S.chipOn : undefined),
+                  onClick: toggleIntegrate,
+                },
+                integrateOn ? `✓ ${t('action.integrate')}` : t('action.integrate'),
+              ),
+            )
+
+      // A jump out of the menu to the project's page. An anchor rather than a
+      // button: `target="_blank"` is what carries the click to the browser, and
+      // the desktop shell turns exactly that into its own external open. The
+      // menu closes on the click, so coming back to the window starts fresh.
+      const openWebItem =
+        webUrl === null
+          ? null
+          : React.createElement(
+              'a',
+              {
+                key: 'open-web',
+                href: webUrl,
+                target: '_blank',
+                rel: 'noopener noreferrer',
+                role: 'menuitem',
+                title: webUrl,
+                style: S.item,
+                onClick: () => {
+                  // After the click's own default action, so removing the menu
+                  // cannot be what cancels the navigation it just started.
+                  if (surface === 'menu') setTimeout(() => setOpen(false), 0)
+                },
+              },
+              t('action.openWeb'),
+            )
+
       // The step a commit-shaped action enters: what will be recorded, the message
       // that records it, the markers a pipeline reads, and the click that does it.
       const pendingLabel = pendingAction === null ? '' : t(pendingAction === 'sync' ? 'action.sync' : 'action.commit')
@@ -2272,9 +2389,11 @@ window.__ModuleLoader__.load({
                       // A recorded selection belongs to the commit that used it: the
                       // next change to the same path starts included again.
                       setExcluded(new Set())
-                      void run(`/github ${action}${dirSuffix(sessionId)}${fileSuffix}${commitSuffix}`).then(() =>
-                        refresh(),
-                      )
+                      void run(
+                        `/github ${action}${dirSuffix(sessionId)}${fileSuffix}${commitSuffix}${
+                          action === 'sync' ? integrateSuffix : ''
+                        }`,
+                      ).then(() => refresh())
                     },
                   },
                   // The click says what it will do: publishing is not the same act as
@@ -2431,6 +2550,11 @@ window.__ModuleLoader__.load({
         // clone and init entries are withheld, because offering them for a
         // workspace that may already be a repository is the worse guess.
         probeError === null && (probe === null || isRepo) ? repoMenu : null,
+        // Beside the action it modifies, and only where that action exists.
+        probeError === null && isRepo ? integrateToggle : null,
+        // The one item that leaves DSH: it opens the repository's home page in
+        // the browser, where the sync controls have no equivalent.
+        probeError === null && isRepo ? openWebItem : null,
         // Directly under the buttons it belongs to, and only while one of them is
         // waiting to be confirmed.
         probeError === null && (probe === null || isRepo) ? commitStep : null,
