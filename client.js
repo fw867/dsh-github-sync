@@ -124,6 +124,8 @@ window.__ModuleLoader__.load({
       'integrate.hint':
         'Commit & push rebases local commits onto the upstream first. A conflict aborts the rebase and pushes nothing.',
       'log.lastCheck': 'Last check',
+      'integrate.behind':
+        'The remote has {count} new commit(s). With auto-rebase off, Commit & push would be refused — pull first or turn the switch on.',
       'commit.step': '{action} · {count} path(s) will be recorded',
       'commit.confirm': 'Record commit',
       'commit.confirmPush': 'Confirm & push',
@@ -229,6 +231,8 @@ window.__ModuleLoader__.load({
       'commit.needCustom': '已选择自定义信息但内容为空；请填写，或切回 AI 生成。',
       'integrate.hint': '“提交并推送”会先把本地提交 rebase（变基）到上游。发生冲突时会中止变基，不会推送。',
       'log.lastCheck': '最近检查',
+      'integrate.behind':
+        '远端有 {count} 个新提交。关闭自动变基时，“提交并推送”会被拒绝；请先拉取，或打开这个开关。',
       'commit.step': '{action} · 将记录 {count} 个路径',
       'commit.confirm': '确认提交',
       'commit.confirmPush': '确认推送',
@@ -602,7 +606,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r43'
+    const BUILD = 'r44'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -2448,6 +2452,21 @@ window.__ModuleLoader__.load({
               ),
             )
 
+      // The switch is on by default, but if it was turned off while the upstream
+      // moved on, say so before the click that would be refused.
+      const integrateBehind =
+        isRepo &&
+        !remoteMissing &&
+        typeof probe?.behind === 'number' &&
+        probe.behind > 0 &&
+        integrateOn !== true
+          ? React.createElement(
+              'div',
+              { key: 'integrate-behind', style: S.hint },
+              t('integrate.behind', { count: probe.behind }),
+            )
+          : null
+
       // A jump out of the menu to the project's page. An anchor rather than a
       // button: `target="_blank"` is what carries the click to the browser, and
       // the desktop shell turns exactly that into its own external open. The
@@ -2669,6 +2688,7 @@ window.__ModuleLoader__.load({
         probeError === null && (probe === null || isRepo) ? repoMenu : null,
         // Beside the action it modifies, and only where that action exists.
         probeError === null && isRepo ? integrateToggle : null,
+        probeError === null ? integrateBehind : null,
         // The one item that leaves DSH: it opens the repository's home page in
         // the browser, where the sync controls have no equivalent.
         probeError === null && isRepo ? openWebItem : null,

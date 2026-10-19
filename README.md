@@ -114,32 +114,36 @@ does for you:
 
 | `integrateBeforePush` | On a diverged branch, `sync` / **Commit & push** |
 |---|---|
-| `false` — **the default** | Records the local commit, then refuses to push — exactly like **Push only** below |
-| `true` | Records the local commit, replays it onto the upstream, and pushes; if the replay conflicts, aborts and cancels |
+| `true` — **the default** | Records the local commit, replays it onto the upstream, and pushes; if the replay conflicts, aborts and cancels |
+| `false` | Records the local commit, then refuses to push — exactly like **Push only** below |
 
 **The local commit is recorded first either way**, so the work is safe whatever
 happens next. What the setting changes is whether the branch is replayed onto the
 upstream for you.
 
-It is off by default because replaying rewrites the parent of local commits: that
-is invisible while they are unpublished, and disruptive once they are not. Turn it
-on when this workspace publishes straight after committing and you would rather
-integrate than be told to:
+It is on by default: the replay only moves commits that are **not on the upstream
+yet**, which is exactly the set that **Commit & push** is trying to publish.
+Forgetting one `/github pull` before a commit used to turn every push into a
+refusal; with this on, the same click fetches, replays, and publishes, and a
+conflict aborts with the local commit intact. To be told to pull instead, turn it
+off:
 
 ```yaml
 - id: github-sync
   name: 'dsh-github-sync'
   config:
-    integrateBeforePush: true
+    integrateBeforePush: false
 ```
 
 The same choice is visible in the menu as **Auto-rebase before push**, under the
-repository actions. It starts from the deployment setting and is remembered in the
-browser; clicking it sends `--integrate` or `--no-integrate` with the next
-`/github sync`, so the command line records which choice was in force. Clicking
-back to the deployment's value forgets the browser override instead of pinning it.
-The YAML setting remains the default for model tools and for slash commands that
-do not pass a flag. On the command line the override is explicit:
+repository actions. It starts checked from the deployment default and is
+remembered in the browser; clicking it sends `--integrate` or `--no-integrate`
+with the next `/github sync`, so the command line records which choice was in
+force. Clicking back to the deployment's value forgets the browser override
+instead of pinning it. If the switch is off and the probe reports the upstream
+has moved, the menu says so before the click that would be refused. The YAML
+setting remains the default for model tools and for slash commands that do not
+pass a flag. On the command line the override is explicit:
 
 ```
 /github sync --integrate       replay onto the upstream before pushing
@@ -158,8 +162,8 @@ Resolve the conflict — merge or rebase by hand, or `/github pull` —
 then run the action again. Nothing was pushed.
 ```
 
-Aborting is what makes integrating safe to enable at all: the one outcome that
-must never happen is a workspace left mid-rebase for a person to dig out of.
+Aborting is what makes integrating safe to leave on by default: the one outcome
+that must never happen is a workspace left mid-rebase for a person to dig out of.
 
 A push that would not fast-forward is refused, naming the commits in the way and
 both counts:
@@ -267,7 +271,7 @@ Each file is self-contained:
 |---|---|
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
-| `test/integrate-toggle.mjs` | The auto-rebase switch: it starts from the config, a click is remembered and travels as `--integrate`/`--no-integrate`, and the command parser and Host agree on which setting wins |
+| `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
 | `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
 | `test/sidebar-tab.mjs` | Every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
@@ -915,7 +919,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     statusOnMount: true       # check when a session appears, or only when opened
     changesScope: all         # all: git's view, untracked files included
     subdirectory: ''          # repository below the workspace root, when there is one
-    integrateBeforePush: false # default for replaying local commits before push; the menu switch can override it
+    integrateBeforePush: true # replay local commits onto the upstream before pushing; the menu switch can override it
     timeoutMs: 600000
 ```
 

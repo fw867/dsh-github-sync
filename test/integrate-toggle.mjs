@@ -217,7 +217,22 @@ async function openMenu(state) {
 
 const syncLines = (state) => state.issued.filter((line) => /^\/github sync\b/.test(line))
 
-console.log('=== the switch is visible, unchecked by default, and remembered ===')
+console.log('=== auto-rebase is on by default ===')
+{
+  ok('the deployment default replays before pushing', resolveConfig().integrateBeforePush === true, resolveConfig().integrateBeforePush)
+}
+
+console.log('\n=== turned off while behind: the menu warns before the refused push ===')
+{
+  const state = boot({ probeBody: { ...PROBE, integrateBeforePush: false, behind: 2 } })
+  const menu = await openMenu(state)
+  const warning = t('integrate.behind', { count: 2 })
+  ok('the warning names the count', textOf(menu.node()).includes(warning), textOf(menu.node()).slice(0, 500))
+  await menu.click(integrateToggleOf(menu.node()))
+  ok('turning it on removes the warning', !textOf(menu.node()).includes(warning), textOf(menu.node()).slice(0, 500))
+}
+
+console.log('\n=== the switch is visible, reflects a config of false, and is remembered ===')
 {
   const store = storage()
   const state = boot({ store })
@@ -358,7 +373,7 @@ console.log('\n=== the command line and the Host agree on the override ===')
 
 console.log('\n=== both dictionaries agree on the new copy ===')
 {
-  for (const key of ['action.integrate', 'integrate.hint']) {
+  for (const key of ['action.integrate', 'integrate.hint', 'integrate.behind']) {
     ok(`${key} is translated`, typeof EN[key] === 'string' && typeof ZH[key] === 'string', { en: EN[key], zh: ZH[key] })
   }
   ok('the en and zh key sets are identical',
