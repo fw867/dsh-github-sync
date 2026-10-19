@@ -273,7 +273,7 @@ Each file is self-contained:
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
 | `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
-| `test/sidebar-tab.mjs` | Every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
+| `test/sidebar-tab.mjs` | The dock services are declared dependencies (so activation waits for them), every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
 | `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
 | `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, and a warm cache costs no probe |
@@ -336,7 +336,7 @@ The tab is registered the way DSH's own sidebar features register theirs:
 
 | Piece | What it is |
 |---|---|
-| `ctx.get('sidebarRight')`, `ctx.get('sidebarRightTabs')` | The dock's two services, looked up through `ctx.get` and **never** read as properties. Cordis answers a read of an undeclared service with `cannot get property "sidebarRight" without inject`, and a plugin that throws while activating takes its fiber down with it — which is how an optional extra stops the client from booting. `ctx.get` returns `undefined` instead, and then there is simply no tab to add. |
+| `sidebarRight`, `sidebarRightTabs` in the module's `inject` | The dock's two services are **declared**, so activation waits for them. Reading `ctx.get` once at activation raced the dock: on some restarts it returned `undefined`, the tab was never registered, and both the menu entry and auto-open disappeared. The composer still registers after the dock, and a late `ctx.inject`/handle keeps the panel reachable if the services are replaced. |
 | `ctx.sidebarRightTabs.register({ id, kind, priority: 'extension', title })` | The tab type. `id` is also the key the body and chip are registered under, and it is deliberately **the same string as `kind`**. The dock dispatches under `definition.id` but falls back to `tab.kind` while a restored tab's definition is not registered yet; two different strings make that fallback miss the body and show the dock's "nothing can view this" message. A `kind` carries at most one `extension` beside the builtin one. |
 | `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id, locale, inject }, Body)` | The pane body. It receives the session's standard props, which is how it knows which workspace to check. |
 | `ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, Chip)` | The tab chip. |

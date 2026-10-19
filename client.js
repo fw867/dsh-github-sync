@@ -378,6 +378,27 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Components that must re-read the sidebar availability.
+     *
+     * The right sidebar's services are optional and can arrive after this plugin
+     * activates. Reading `ctx.get` once made the tab and its "Open in sidebar"
+     * entry disappear on the runs where the dock won the race. `ctx.inject`
+     * registers when they arrive; these listeners re-render the composer and
+     * re-run auto-open once they are real.
+     */
+    const sidebarStateListeners = new Set()
+
+    const notifySidebarState = () => {
+      for (const listener of sidebarStateListeners) {
+        try {
+          listener()
+        } catch {
+          // A composer that unmounted between registration and notification.
+        }
+      }
+    }
+
     /** How long a full answer may be reused by a reopen, in milliseconds. */
     const OPEN_REUSE_MS = 1200
 
@@ -606,7 +627,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r44'
+    const BUILD = 'r47'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1421,6 +1442,10 @@ window.__ModuleLoader__.load({
       // A counter whose only job is to re-render a component that was waiting on a
       // probe issued by another surface. See `waitForProbe` above.
       const [, setProbeRevision] = React.useState(0)
+      // `sidebarReady` is injected as a boolean and refreshed by the listener
+      // below when a late `sidebarRight`/`sidebarRightTabs` pair arrives.
+      const sidebarReady = props.sidebarReady === true
+      const [, setSidebarRevision] = React.useState(0)
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(null)
       // Separate from `busy` on purpose. Only a user action sets this, and only
@@ -1457,6 +1482,17 @@ window.__ModuleLoader__.load({
       // the namespace object identity changes.
       const remoteRef = React.useRef(remote)
       remoteRef.current = remote
+
+      // The dock can become available after this control has mounted; wake the
+      // composer so its "Open in sidebar" entry and auto-open see the real
+      // services instead of the pre-injection absence.
+      React.useEffect(() => {
+        const listener = () => setSidebarRevision((value) => value + 1)
+        sidebarStateListeners.add(listener)
+        return () => {
+          sidebarStateListeners.delete(listener)
+        }
+      }, [])
 
       /**
        * Run one `/github` line through the addressed session and record it.
@@ -1923,7 +1959,7 @@ window.__ModuleLoader__.load({
           if (timer !== null) clearTimeout(timer)
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-      }, [surface, autoOpen, sessionId, probe?.state])
+      }, [surface, autoOpen, sessionId, probe?.state, sidebarReady])
       // A repository created with `init` has no remote, and offering it "push"
       // is a dead end: the action can only fail. The check reports the remote as
       // `null` when there is none and as a URL when there is one, so only a
@@ -2804,7 +2840,11 @@ window.__ModuleLoader__.load({
       // name. Declaring only `remote` made every `remote.commands` read throw
       // `cannot get property "remote.commands" without inject`, which is the
       // failure the workspace check reported instead of an answer.
-      inject: ['slots', 'remote', 'remote.commands', 'locale'],
+      // The right-sidebar services are required here rather than optional: the
+      // composer's "Open in sidebar" entry and auto-open are part of this
+      // control, and a `ctx.inject` race left the tab unregistered on some
+      // restarts. Declaring them makes activation wait for the dock.
+      inject: ['slots', 'remote', 'remote.commands', 'locale', 'sidebarRight', 'sidebarRightTabs'],
       apply(ctx) {
         // Both dictionaries are registered under one namespace; the Client's
         // active locale selects between them, and English is the fallback for
@@ -2819,23 +2859,17 @@ window.__ModuleLoader__.load({
             GithubCommandRow,
           ),
         )
-        // The dock's services are looked up through `ctx.get`, never read as
-        // properties. Cordis answers a read of an undeclared service with a throw
-        // (`cannot get property "sidebarRight" without inject`), and a plugin that
-        // throws while activating takes its whole fiber down — which is how an
-        // optional extra can stop the client from booting. `ctx.get` returns
-        // `undefined` instead: a deployment without the right sidebar simply has no
-        // tab to add, and the menu is unaffected either way.
-        const sidebar = ctx.get('sidebarRight')
-        const sidebarTabs = ctx.get('sidebarRightTabs')
-        // The tab is registered before the menu is: the menu offers the way in only
-        // once the tab exists, because opening a kind nobody registered is an error
-        // on the dock's side, and an item that can only fail is worse than no item.
+        // The right sidebar is optional, and its services can arrive after this
+        // plugin activates. `ctx.get` read once made the tab, the "Open in the
+        // sidebar" entry, and auto-open disappear whenever the dock lost that race.
+        // `ctx.inject` waits for both services and re-runs when they change; the
+        // mutable handle lets the already-mounted composer see them through a
+        // re-render instead of being stuck with the activation-time answer.
         //
-        // The guard is inside each effect rather than around them: an effect body is
-        // the unit the runtime may run later, and a throw from there must not reach
-        // the plugin's activation either way. `console.warn` is used rather than
-        // `ctx.logger`, which is another service this plugin does not declare.
+        // The guard is inside each registration rather than around the injection:
+        // one refused registration costs a menu entry and a warning, never the
+        // composer. `console.warn` is used rather than `ctx.logger`, which is
+        // another service this plugin does not declare.
         const guarded = (what, fn) => {
           try {
             return fn()
@@ -2844,14 +2878,56 @@ window.__ModuleLoader__.load({
             return undefined
           }
         }
-        let sidebarReady = false
+        let sidebarApi = null
         let diffReady = false
-        if (sidebar !== undefined && sidebarTabs !== undefined) {
+        const openSidebar = () => {
+          try {
+            sidebarApi?.openTab(SIDEBAR_KIND)
+          } catch {
+            // A click before the dock answered is a no-op, not a crash.
+          }
+        }
+        // A resource tab *beside* the repo panel rather than in place of it, so the
+        // change list stays where it was and each file's patch keeps its own tab.
+        const openDiffTab = (session, path) => {
+          try {
+            sidebarApi?.openResource(diffAddress(session, path))
+          } catch {
+            // Same as openSidebar: the dock may not have answered yet.
+          }
+        }
+        const sidebarExpanded = () => {
+          try {
+            return sidebarApi?.isExpanded() === true
+          } catch {
+            return false
+          }
+        }
+        const injectSidebar = (callback) => {
+          if (typeof ctx.inject === 'function') {
+            ctx.inject(['sidebarRight', 'sidebarRightTabs'], callback)
+            return
+          }
+          // The test seam and an older client context may not expose `inject`;
+          // fall back to a one-shot activation with the same scope shape.
+          const sidebar = ctx.get('sidebarRight')
+          const sidebarTabs = ctx.get('sidebarRightTabs')
+          if (sidebar === undefined || sidebarTabs === undefined) return
+          callback({
+            sidebarRight: sidebar,
+            sidebarRightTabs: sidebarTabs,
+            effect: ctx.effect,
+            slots: ctx.slots,
+          })
+        }
+        injectSidebar((scope) => {
+          const sidebar = scope.sidebarRight
+          const sidebarTabs = scope.sidebarRightTabs
           // The right sidebar, extended the way the Files and Terminal features
           // extend it: a tab type, then the body and the chip title registered
           // under the same id. `extension` is the slot a plugin owns; a `kind`
           // carries at most one of those beside the builtin one.
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the sidebar tab', () => {
               const dispose = sidebarTabs.register({
                 id: SIDEBAR_ID,
@@ -2863,14 +2939,21 @@ window.__ModuleLoader__.load({
                 keepMounted: true,
                 title: () => ctx.locale.bind(LOCALE_NAMESPACE)('sidebar.title'),
               })
-              sidebarReady = true
-              return dispose
+              sidebarApi = sidebar
+              notifySidebarState()
+              return () => {
+                dispose()
+                if (sidebarApi === sidebar) {
+                  sidebarApi = null
+                  notifySidebarState()
+                }
+              }
             }),
           )
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the sidebar pane', () =>
-              ctx.slots.inject('sidebar.right.pane.tab', () =>
-                ctx.slots.register(
+              scope.slots.inject('sidebar.right.pane.tab', () =>
+                scope.slots.register(
                   {
                     name: 'sidebar.right.pane.tab',
                     key: SIDEBAR_ID,
@@ -2882,10 +2965,10 @@ window.__ModuleLoader__.load({
               ),
             ),
           )
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the sidebar chip', () =>
-              ctx.slots.inject('sidebar.right.pane.tab.title', () =>
-                ctx.slots.register(
+              scope.slots.inject('sidebar.right.pane.tab.title', () =>
+                scope.slots.register(
                   { name: 'sidebar.right.pane.tab.title', key: SIDEBAR_ID, locale: LOCALE_NAMESPACE },
                   (props) => React.createElement('span', null, props?.t?.('sidebar.title') ?? 'GitHub'),
                 ),
@@ -2895,7 +2978,7 @@ window.__ModuleLoader__.load({
           // The diff tab is registered before the menu for the same reason the
           // sidebar tab is: an item that opens a kind nobody registered is an error
           // on the dock's side.
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the diff tab', () => {
               const dispose = sidebarTabs.register({
                 id: DIFF_ID,
@@ -2909,13 +2992,18 @@ window.__ModuleLoader__.load({
                   ctx.locale.bind(LOCALE_NAMESPACE)('diff.tabTitle', { path: diffPathOf(address) ?? '' }),
               })
               diffReady = true
-              return dispose
+              notifySidebarState()
+              return () => {
+                dispose()
+                diffReady = false
+                notifySidebarState()
+              }
             }),
           )
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the diff pane', () =>
-              ctx.slots.inject('sidebar.right.pane.tab', () =>
-                ctx.slots.register(
+              scope.slots.inject('sidebar.right.pane.tab', () =>
+                scope.slots.register(
                   {
                     name: 'sidebar.right.pane.tab',
                     key: DIFF_ID,
@@ -2927,21 +3015,17 @@ window.__ModuleLoader__.load({
               ),
             ),
           )
-          ctx.effect(() =>
+          scope.effect(() =>
             guarded('registering the diff chip', () =>
-              ctx.slots.inject('sidebar.right.pane.tab.title', () =>
-                ctx.slots.register(
+              scope.slots.inject('sidebar.right.pane.tab.title', () =>
+                scope.slots.register(
                   { name: 'sidebar.right.pane.tab.title', key: DIFF_ID, locale: LOCALE_NAMESPACE },
                   (props) => React.createElement('span', null, props?.t?.('diff.chip') ?? 'Diff'),
                 ),
               ),
             ),
           )
-        }
-        const openSidebar = () => sidebar.openTab(SIDEBAR_KIND)
-        // A resource tab *beside* the repo panel rather than in place of it, so the
-        // change list stays where it was and each file's patch keeps its own tab.
-        const openDiffTab = (session, path) => sidebar.openResource(diffAddress(session, path))
+        })
         ctx.slots.inject('conversation.input.left', () =>
           ctx.slots.register(
             {
@@ -2957,20 +3041,18 @@ window.__ModuleLoader__.load({
               inject: () => ({
                 remote: ctx.remote,
                 surface: 'menu',
-                ...(sidebarReady
+                // The composer is registered before the dock may be available.
+                // The boolean is what re-runs auto-open and reveals the menu entry
+                // once `sidebarApi` arrives; the functions are safe while null.
+                sidebarReady: sidebarApi !== null,
+                ...(sidebarApi !== null
                   ? {
                       openSidebar,
                       // Asked at the moment a session appears, so it is a call and
                       // not a captured value: a boolean would be the previous
                       // session's answer. A deployment without the controller keeps
                       // the menu's own way in.
-                      sidebarExpanded: () => {
-                        try {
-                          return sidebar.isExpanded() === true
-                        } catch {
-                          return false
-                        }
-                      },
+                      sidebarExpanded,
                     }
                   : {}),
                 ...(diffReady ? { openDiffTab } : {}),

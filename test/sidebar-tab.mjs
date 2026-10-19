@@ -89,12 +89,20 @@ const env = {
   effect: (callback) => { callback(); return () => {} },
 }
 
-definition.factory((id) => {
+const plugin = definition.factory((id) => {
   if (id === 'react') return React
   throw new Error(`unexpected require ${id}`)
-}).apply(env)
+})
+plugin.apply(env)
 
-console.log('=== every tab type and its body share one identity ===')
+console.log('=== the plugin waits for the dock before it activates ===')
+{
+  const inject = Array.isArray(plugin.inject) ? plugin.inject : []
+  ok('sidebarRight is a declared dependency', inject.includes('sidebarRight'), inject)
+  ok('sidebarRightTabs is a declared dependency', inject.includes('sidebarRightTabs'), inject)
+}
+
+console.log('\n=== every tab type and its body share one identity ===')
 {
   ok('the plugin registered two tab types', tabTypes.length === 2, tabTypes.map((entry) => entry.kind))
   for (const type of tabTypes) {
