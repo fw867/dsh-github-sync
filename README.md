@@ -269,6 +269,8 @@ Each file is self-contained:
 
 | File | What it pins |
 |---|---|
+| `test/commit-subject.mjs` | The deterministic subject: it names the change, never carries repository paths, and is composed within 72 characters rather than sliced at them — the `chore: 更新 app/src/…/A.kt、…/B.kt 等 …` regression |
+| `test/commit-retry.mjs` | The model call is retried before the fallback: a provider error, a thrown stream, and a reasoning-only answer each get another try (with a larger budget in the last case), an abort does not, and the fallback is reached only after every attempt |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
@@ -909,6 +911,7 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     branch: ''                # branch to check out after a fresh clone
     generateCommitMessage: true
     commitMaxTokens: 900     # one generated message, reasoning included
+    commitAttempts: 3        # tries before the deterministic subject takes over
     commitLanguage: auto      # auto follows the local language; zh/en force one
     commitProvider: ''        # provider route for message generation
     commitModel: ''           # model id for message generation
@@ -942,24 +945,40 @@ subject line and a short body — in the language the workspace runs in:
 1. The model named by `commitProvider`/`commitModel`, else the deployment's
    default model, is asked for the message using the staged diff, the diffstat,
    and the recent subjects. The prompt asks for a subject that names the module,
-   behaviour, command, or option that changed — never how many files changed, and
-   never just the name of a symbol that was added — followed by two to four
-   bullets saying what the change does now and why it matters. Both parts are
-   written in the resolved language, with the type token left in English.
-2. If generation is disabled, unavailable, or returns nothing, a deterministic
-   synthesis builds the **subject** from the change set, so a push is never
-   blocked by the generator. It reads `git diff --cached --name-status` and the
-   staged patch, and names the change in this order:
+   behaviour, command, or option that changed — never how many files changed,
+   never a list of file names or paths, and never just the name of a symbol that
+   was added — followed by two to four bullets saying what the change does now and
+   why it matters. Both parts are written in the resolved language, with the type
+   token left in English.
+2. A failed or empty answer is retried before anything else — `commitAttempts`,
+   default 3 — because a provider hiccup and a thinking model that spent the whole
+   budget are transient. If generation is disabled, unavailable, or every attempt
+   fails, a deterministic synthesis builds the **subject** from the change set, so
+   a push is never blocked by the generator. It reads
+   `git diff --cached --name-status` and the staged patch, and names the change in
+   this order:
    - the declarations the patch adds or removes (`feat(commit): add
      resolveSubjectLanguage`),
    - the documentation section an added heading opens (`docs: update the
      "Commit titles" section`),
-   - otherwise the files it touches (`chore(config): update lib/config.js and
-     package.json`), naming at most three and summarizing the rest.
+   - otherwise the files it touches, **by file name and never by path**
+     (`chore(config): update config.js and package.json`), naming at most two and
+     summarizing the rest in the count — and saying `移除`/`remove` rather than
+     "update" when the change only deletes files.
 
-   "`chore: update 6 files`" is deliberately not reachable: the file count is
-   the one fact a diffstat already gives and the one fact that says nothing
-   about the change.
+   The subject is composed within 72 characters, not cut to them: a summary that
+   would not fit drops to one file name, then to the count alone. That is why the
+   fallback cannot produce `chore: 更新 app/src/…/A.kt、…/B.kt 等 …` — a
+   directory listing sliced at character 72, which is the one thing it must not
+   be. The count on its own is the floor rather than the summary: it is reached
+   only when even one file name would overflow, because it is the fact a diffstat
+   already gives.
+
+   The scope is the module the change lives in: the parent directory name when
+   every path agrees on one — which is why a change spanning `src/main` and
+   `src/test` gets `(iap2)` rather than `(src)` — and otherwise the deepest shared
+   directory. Layout segments (`src`, `main`, `java`, `test`, …) are never used as
+   a scope, and neither is a scope that only repeats the type.
 
 The subject language is `commitLanguage` when it names one, and otherwise the
 local language: `LC_ALL`/`LC_MESSAGES`/`LANG`, then the runtime's resolved
@@ -989,6 +1008,19 @@ to reasoning effort `off`, and DSH's session-title generator calls the model the
 same way. The fallback note counts the chunks it saw
 (`model returned no text (0 text, 137 reasoning, 0 other chunks)`), so a
 reasoning-only answer is distinguishable from a provider that failed.
+
+A failed answer is retried before the fallback is taken at all. `commitAttempts`
+(default 3, clamped to 1–5; `1` disables retrying) covers the failures that are
+transient: a provider error, a rate limit, a thrown stream, an empty answer. The
+waits are 300 ms and 800 ms, because this happens inside a commit. Two cases are
+deliberately not retried — an abort, which is the caller's own decision, and a
+route that cannot exist (`no llm service` / `no provider/model`), where another
+identical call could only fail the same way. A reasoning-only answer is retried
+with **twice the budget** (capped at 4096 tokens), since repeating the same
+request under the same ceiling is how a thinking model fails twice. The fallback
+note states what was spent and how many attempts it took — for example,
+`provider unavailable (after 3 attempts)` — and a message that only arrived on a
+retry is reported as `subject generated by the model on attempt 2`.
 
 ## Tool reference
 
