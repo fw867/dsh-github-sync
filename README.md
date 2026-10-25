@@ -271,6 +271,7 @@ Each file is self-contained:
 |---|---|
 | `test/commit-subject.mjs` | The deterministic subject: it names the change, never carries repository paths, and is composed within 72 characters rather than sliced at them — the `chore: 更新 app/src/…/A.kt、…/B.kt 等 …` regression |
 | `test/commit-retry.mjs` | The model call is retried before the fallback: a provider error, a thrown stream, and a reasoning-only answer each get another try (with a larger budget in the last case), an abort does not, and the fallback is reached only after every attempt |
+| `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
@@ -379,14 +380,22 @@ log size and replay — which is what the rest of this section is about.
 | The answer carries pairs, not prose | A change is `[path, code]` and the counts are `[total, staged]`. The words a person reads are built where they are rendered, in the active language, and no field the control never reads is sent at all (`root`, `entries`, `fetchOnStatus`, and a branch's `upstream` were all dead weight). On the same 21-file tree the full answer is **762 bytes** where the old shape was 1953. |
 | **Opening the menu re-reads the panel data** | That is the one moment a person is looking at the list, so a stale list is worse than the event it costs. Only a reopen within 1.2s reuses the answer already in hand, so a double-click does not probe twice. |
 | **Returning to the window refreshes quietly** | Files change while the window is not looking — an editor outside DSH, a build, a `git switch` in a terminal. A `focus` on the window refreshes when the last answer is older than 20s, and announces no failure: a background check must never replace the menu with an error nobody asked for. |
+| **A panel that is on screen re-reads the workspace every 10s** | The list is the one thing that goes stale while the window keeps focus, because an agent editing files in the session never makes it lose focus. While the menu is open or the pane is mounted, and the tab is visible, one background probe runs per interval: no state line, no announcement, and no tick while a probe is already in flight. A hidden tab skips its ticks, and closing the panel clears the timer. |
 | Read-only actions mostly do not re-check | `changes`, `status`, and `auth` cannot alter what the probe reports, so they do not trigger one. `diff` does refresh afterwards, because that click is the person asking to see the current state. |
 
-Those two moments are the whole refresh policy. A timer was rejected on purpose:
-it would write a command event every time it fired whether or not anything had
-changed. DSH's own `workspaceFiles.changes` stream was considered too, and it
-watches **one directory's direct entries** — an edit inside a subdirectory does
-not notify it — so it would have added a client dependency for partial coverage of
-the case the open-and-focus refreshes already cover exactly.
+Those three moments are the whole refresh policy. The timer the design originally
+rejected is now the third one, and the cost it was rejected for is real: each tick
+is a `/github` command appended to the session log, so a visible panel costs about
+six of them a minute. That is bounded to the moments the panel is actually on
+screen, the probe rows are sidebar-only, and the alternative is worse — a change
+list that silently stops matching the working tree while the person watches it,
+which is exactly what an agent editing files in the session produces. The focus
+refresh stays separate on purpose: it covers work done while the window was not
+looking, and it is the one that runs for a *closed* control. DSH's own
+`workspaceFiles.changes` stream was considered instead: its directory watches
+cover one directory's direct entries, so watching the workspace root would not see
+an edit in `lib/`, and matching the repository tree would mean one watcher per
+directory in it.
 
 The preference lives in Host config, which the Client cannot read, so it arrives
 with a check's answer, applies to the sessions created after that, and is

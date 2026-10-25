@@ -405,6 +405,17 @@ window.__ModuleLoader__.load({
     /** How long a badge answer stays fresh enough to skip a focus refresh. */
     const FOCUS_REFRESH_MS = 20000
 
+    /**
+     * How often a panel that is on screen re-reads the workspace.
+     *
+     * The change list is the one thing that goes stale while the window never
+     * loses focus — the agent editing files in this very session is the ordinary
+     * case — so a visible panel is re-read on this interval instead of waiting for
+     * a focus event that never comes. The probe is sidebar-only, and a hidden tab
+     * and an in-flight probe both skip a tick.
+     */
+    const PANEL_REFRESH_MS = 10000
+
     /** Where the mount-check preference survives a page reload. */
     const STATUS_ON_MOUNT_KEY = 'dsh-github-sync:status-on-mount'
 
@@ -627,7 +638,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r49'
+    const BUILD = 'r50'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1505,7 +1516,8 @@ window.__ModuleLoader__.load({
        * Run one `/github` line through the addressed session and record it.
        *
        * @param command - the complete slash-command line.
-       * @param options - `quiet` suppresses the visible output panel; `signal`
+       * @param options - `quiet` suppresses the visible output panel; `background`
+       *   leaves the state line alone, for a refresh nobody asked for; `signal`
        *   is forwarded as the Remote call's cancellation, so a probe that is
        *   abandoned at the timeout also cancels its transport request.
        * @param targetSession - the session to address; defaults to this one.
@@ -1519,7 +1531,10 @@ window.__ModuleLoader__.load({
           return { text: undefined, failure: t('error.unavailable') }
         }
         let failureText = null
-        setBusy(command)
+        // A background probe is one nobody asked for: it must not blank the state
+        // line for the length of a `git status`, and it re-renders through the
+        // probe revision instead of through `busy`.
+        if (options?.background !== true) setBusy(command)
         // A probe is background work: it reports progress in the state line but
         // never disables the controls.
         if (options?.probe !== true) setActionBusy(command)
@@ -1560,7 +1575,7 @@ window.__ModuleLoader__.load({
           }
           return { text: undefined, failure: message }
         } finally {
-          setBusy(null)
+          if (options?.background !== true) setBusy(null)
           if (options?.probe !== true) setActionBusy(null)
         }
       }
@@ -1683,7 +1698,11 @@ window.__ModuleLoader__.load({
         const choice = targetChoice.get(address)
         const scope = choice === undefined ? '' : ` --dir "${choice}"`
         const probeLine = `/github status --json${scope}${slim ? ' --slim' : ''}`
-        const outcome = await run(probeLine, { quiet: true, probe: true, signal }, address)
+        const outcome = await run(
+          probeLine,
+          { quiet: true, probe: true, signal, background: options?.background === true },
+          address,
+        )
         if (outcome.text === undefined) {
           probeCache.delete(address)
           probeShape.delete(address)
@@ -1732,6 +1751,9 @@ window.__ModuleLoader__.load({
           probeShape.set(address, slim ? 'slim' : 'full')
           setProbeError(null)
         }
+        // A background probe wrote the cache the panel reads, and changed no state
+        // the render observes: bump the revision so the newer answer is drawn.
+        if (options?.background === true) setProbeRevision((value) => value + 1)
       }
 
       // A session is probed the first time its menu opens, and its result is
@@ -1818,11 +1840,8 @@ window.__ModuleLoader__.load({
 
       // Files change while the window is not looking — an editor outside DSH, a
       // build, a `git switch` in a terminal. Coming back to the window is the
-      // signal for that, and it is the only background refresh this control makes:
-      // a timer would spend a logged command row every time it fired whether or
-      // not anything had changed, and the answer's whole purpose is to be read
-      // when someone is looking. The refresh is quiet — a failure here must not
-      // replace the menu with an error the person did not ask for.
+      // signal for that, and the refresh is quiet: a failure here must not replace
+      // the menu with an error the person did not ask for.
       React.useEffect(() => {
         if (sessionId === undefined) return undefined
         const onFocus = () => {
@@ -1834,6 +1853,45 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('focus', onFocus)
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [sessionId])
+
+      // A panel that is on screen cannot wait for focus: the window keeps it the
+      // whole time the agent edits files in this session, and a change list that
+      // lags behind the working tree is the one staleness a person notices. So a
+      // visible panel — the menu open or the pane mounted — re-reads the workspace
+      // on an interval, as a background probe: no state line, no announcement, and
+      // no second probe while one is in flight or one landed within the interval.
+      //
+      // This is the timer the original design rejected, and the reason it was
+      // rejected still holds — each tick is a logged command. What changed is the
+      // alternative: a sidebar whose list silently stops matching the tree while
+      // the person watches it. The cost is bounded to the moments the panel is
+      // actually on screen, and a hidden tab skips its ticks.
+      React.useEffect(() => {
+        if (!wantsData || sessionId === undefined) return undefined
+        const tick = () => {
+          if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+          if (probeInFlight.has(sessionId)) return
+          // Only a workspace that answered as a repository has a list to re-read:
+          // polling a directory with no repository would buy the same "no
+          // repository" answer every ten seconds.
+          if ((probeCache.get(sessionId)?.state ?? null) !== 'repo') return
+          if (Date.now() - (probeFresh.get(sessionId) ?? 0) < PANEL_REFRESH_MS) return
+          void refresh(sessionId, false, { background: true })
+        }
+        const timer = setInterval(tick, PANEL_REFRESH_MS)
+        // The Node process that loads this bundle in tests must not be kept alive
+        // by the interval; a browser timer is a number and has no `unref`.
+        timer?.unref?.()
+        const onVisible = () => {
+          if (document.visibilityState === 'visible') tick()
+        }
+        document.addEventListener('visibilitychange', onVisible)
+        return () => {
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisible)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [wantsData, sessionId])
 
 
       // The action result belongs to the interaction that produced it. Closing the
