@@ -271,6 +271,7 @@ Each file is self-contained:
 |---|---|
 | `test/commit-subject.mjs` | The deterministic subject: it names the change, never carries repository paths, and is composed within 72 characters rather than sliced at them — the `chore: 更新 app/src/…/A.kt、…/B.kt 等 …` regression |
 | `test/commit-retry.mjs` | The model call is retried before the fallback: a provider error, a thrown stream, and a reasoning-only answer each get another try (with a larger budget in the last case), an abort does not, and the fallback is reached only after every attempt |
+| `test/commit-generation.mjs` | The model request carries no `temperature` (reasoning models reject it), keeps `purpose: 'session-title'`, uses the selected provider/model, and a usable answer becomes the subject |
 | `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
@@ -922,8 +923,8 @@ Every field is optional. Set them on the `github-sync` row in the profile's
     commitMaxTokens: 900     # one generated message, reasoning included
     commitAttempts: 3        # tries before the deterministic subject takes over
     commitLanguage: auto      # auto follows the local language; zh/en force one
-    commitProvider: ''        # provider route for message generation
-    commitModel: ''           # model id for message generation
+    commitProvider: ''        # provider for message generation; empty follows the session
+    commitModel: ''           # model id for message generation; empty follows the session
     commitDiffBytes: 12000    # diff context sent to the model
     pullRebase: true          # pull --rebase --autostash
     auth: auto                # auto: ssh, then token, then the system helper
@@ -951,9 +952,10 @@ silently changing behaviour mid-push — including an enumeration such as
 [Conventional Commits](https://www.conventionalcommits.org/) **message** — a
 subject line and a short body — in the language the workspace runs in:
 
-1. The model named by `commitProvider`/`commitModel`, else the deployment's
-   default model, is asked for the message using the staged diff, the diffstat,
-   and the recent subjects. The prompt asks for a subject that names the module,
+1. The model named by `commitProvider`/`commitModel`, else the **calling
+   Session's selected model**, else the deployment default, is asked for the
+   message using the staged diff, the diffstat, and the recent subjects. The
+   prompt asks for a subject that names the module,
    behaviour, command, or option that changed — never how many files changed,
    never a list of file names or paths, and never just the name of a symbol that
    was added — followed by two to four bullets saying what the change does now and
@@ -1017,6 +1019,20 @@ to reasoning effort `off`, and DSH's session-title generator calls the model the
 same way. The fallback note counts the chunks it saw
 (`model returned no text (0 text, 137 reasoning, 0 other chunks)`), so a
 reasoning-only answer is distinguishable from a provider that failed.
+
+A third detail: **no `temperature` is sent**. Reasoning models reject it with
+`400 Unsupported parameter: 'temperature'`, and the old fixed `0` made every
+attempt on `gpt-6.1-sol` fail the same way — after three tries the commit fell
+back to `更新 N 个文件` with the reason in the commit step. The prompt fixes the
+shape; sampling temperature was never what made the subject deterministic.
+
+The model is the **calling Session's selection** — the one shown in the
+composer — because that is the model the person expects the message to come from.
+`commitProvider`/`commitModel` still win when a deployment wants a dedicated
+cheap utility model. Without either, the deployment default is the last fallback
+for a headless call. The conversation's `reasoningEffort` is intentionally not
+forwarded: `purpose: 'session-title'` keeps this utility call from spending the
+message budget on thinking.
 
 A failed answer is retried before the fallback is taken at all. `commitAttempts`
 (default 3, clamped to 1–5; `1` disables retrying) covers the failures that are
