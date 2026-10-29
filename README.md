@@ -98,7 +98,9 @@ The menu offers:
 - **Pull** — fetch and integrate the remote branch
 - **Commit & push** — stage everything, commit with a generated subject,
   integrate the upstream, push
-- **Push only** — publish the current branch
+- **Push only** — publish the current branch. `/github push <branch>` publishes a
+  named one instead, which is also the deliberate way to recreate a branch the
+  remote deleted (see [A default branch renamed on the remote](#a-default-branch-renamed-on-the-remote)).
 - **Auto-rebase before push** — the switch that decides whether Commit & push
   replays local commits onto the upstream first. It starts from
   `integrateBeforePush`; a click is remembered in this browser and travels with
@@ -273,6 +275,7 @@ Each file is self-contained:
 | `test/commit-retry.mjs` | The model call is retried before the fallback: a provider error, a thrown stream, and a reasoning-only answer each get another try (with a larger budget in the last case), an abort does not, and the fallback is reached only after every attempt |
 | `test/commit-generation.mjs` | The model request carries no `temperature` (reasoning models reject it), keeps `purpose: 'session-title'`, uses the selected provider/model, and a usable answer becomes the subject |
 | `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
+| `test/branch-rename.mjs` | A default branch renamed on the remote, against real git: the probe names the remote default and the remote-only branch, a refresh fetches while a plain probe reports the stale name, switching creates the tracking branch, the listing reports it, a push and a pull from the old branch refuse with the reason instead of recreating or relaying git's error — while naming the branch still publishes it |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
@@ -280,7 +283,7 @@ Each file is self-contained:
 | `test/sidebar-tab.mjs` | The dock services are declared dependencies (so activation waits for them), every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
 | `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
-| `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, and a warm cache costs no probe |
+| `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, the branch context survives a later slim answer, and a warm cache costs no probe |
 
 They load the shipped `client.js` and read its dictionaries, so a renamed key or a
 changed default fails here rather than in the browser. The client publishes its
@@ -378,15 +381,18 @@ log size and replay — which is what the rest of this section is about.
 | `statusOnMount: true` (default) | The workspace is checked when a session appears, so the sync badge is live without opening anything. One event pair per session, not rendered in chat. |
 | `statusOnMount: false` | The check waits for the control to be opened. A session whose control is never opened writes no probe event. |
 | `status --json --slim` | The mount check asks for the badge's fields only: no change list, no branch list. Measured at **210 bytes** on a 21-file tree, and it does not grow with the change count. |
-| The answer carries pairs, not prose | A change is `[path, code]` and the counts are `[total, staged]`. The words a person reads are built where they are rendered, in the active language, and no field the control never reads is sent at all (`root`, `entries`, `fetchOnStatus`, and a branch's `upstream` were all dead weight). On the same 21-file tree the full answer is **762 bytes** where the old shape was 1953. |
+| The answer carries pairs, not prose | A change is `[path, code]` and the counts are `[total, staged]`. The words a person reads are built where they are rendered, in the active language, and no field the control never reads is sent at all (`root`, `entries`, `fetchOnStatus`, and a branch's own `upstream` were all dead weight). On the same 21-file tree the full answer is **762 bytes** where the old shape was 1953; the branch context below adds a few dozen bytes, and only when a rename made it different from what the change list already implies. |
 | **Opening the menu re-reads the panel data** | That is the one moment a person is looking at the list, so a stale list is worse than the event it costs. Only a reopen within 1.2s reuses the answer already in hand, so a double-click does not probe twice. |
 | **Returning to the window refreshes quietly** | Files change while the window is not looking — an editor outside DSH, a build, a `git switch` in a terminal. A `focus` on the window refreshes when the last answer is older than 20s, and announces no failure: a background check must never replace the menu with an error nobody asked for. |
-| **A panel that is on screen re-reads the workspace every 10s** | The list is the one thing that goes stale while the window keeps focus, because an agent editing files in the session never makes it lose focus. While the menu is open or the pane is mounted, and the tab is visible, one background probe runs per interval: no state line, no announcement, and no tick while a probe is already in flight. A hidden tab skips its ticks, and closing the panel clears the timer. |
+| **A panel that is on screen re-reads the workspace every 10s** | The list is the one thing that goes stale while the window keeps focus, because an agent editing files in the session never makes it lose focus. While the menu is open or the pane is mounted, and the tab is visible, one background probe runs per interval: no state line, no announcement, and no tick while a probe is already in flight. A hidden tab skips its ticks, and closing the panel clears the timer. These ticks are **local** by default — they re-read the working tree and the remote-tracking refs; a deployment with `fetchOnStatus: true` makes each one fetch as well. |
+| **Refresh asks the remote** | The pane's **Refresh** button is the one probe that fetches (`status --json --fetch`), because it is a person asking what the remote holds *now*. That is also the one way a default branch renamed a minute ago reaches a deployment that leaves `fetchOnStatus` off; everything scheduled stays local so no timer starts a network round trip. |
 | Read-only actions mostly do not re-check | `changes`, `status`, and `auth` cannot alter what the probe reports, so they do not trigger one. `diff` does refresh afterwards, because that click is the person asking to see the current state. |
 
-Those three moments are the whole refresh policy. The timer the design originally
-rejected is now the third one, and the cost it was rejected for is real: each tick
-is a `/github` command appended to the session log, so a visible panel costs about
+Those three moments are the whole automatic refresh policy, and none of them calls
+the network unless the deployment turned on `fetchOnStatus` or someone presses
+**Refresh**. The timer the design originally rejected
+is now the third moment, and the cost it was rejected for is real: each tick is a
+`/github` command appended to the session log, so a visible panel costs about
 six of them a minute. That is bounded to the moments the panel is actually on
 screen, the probe rows are sidebar-only, and the alternative is worse — a change
 list that silently stops matching the working tree while the person watches it,
@@ -416,14 +422,37 @@ home page, normalized from `remote`, or `null` when the remote has none. It is
 carried per answer rather than derived in the Client so that a git URL is
 interpreted in exactly one place.
 
+Three more fields belong to the branch list and are **full-answer only** (the slim
+mount answer never carries them): `remoteDefault` is the branch
+`refs/remotes/<remote>/HEAD` points at — the remote's own idea of its default — and
+`remoteBranches` lists the remote-tracking branches that have no local
+counterpart, capped like the local list. `upstreamGone` with `upstream` names the
+tracked branch on the current branch when a fetch found it deleted on the remote.
+They exist because a default branch renamed on GitHub leaves exactly that shape: a
+local branch tracking a ref that no longer exists, and a new name that is visible
+only on the remote. Without them the panel shows the old branch as if nothing had
+happened and offers no way to the one the remote actually uses.
+
 ### Keeping the counts honest
 
 The ahead/behind counts describe the remote as of the last fetch, so they can
 understate a remote that moved on. Setting `fetchOnStatus: true` makes the check
-fetch first. That is safe to automate because **a fetch touches only
-remote-tracking refs** — never the working tree, the index, or local branches,
-which the tests assert. Merging what it finds is not safe to automate and stays
-the explicit **Pull** action.
+fetch first, and the pane's **Refresh** asks for the same thing one click at a
+time (`status --json --fetch`). That is safe to automate because **a fetch touches
+only remote-tracking refs** — never the working tree, the index, or local
+branches, which the tests assert. Merging what it finds is not safe to automate
+and stays the explicit **Pull** action.
+
+Every fetch this plugin runs also **prunes** and keeps the remote's `HEAD` current
+(`remote.<name>.followRemoteHEAD=always`). Both exist for the same event: a branch
+deleted or renamed on the remote. Without the prune, `origin/<old>` lingers and
+`@{u}` resolves against a branch the remote no longer has, so the counts read
+`0/0` — a claim of being in sync with nothing. Without the `HEAD` setting, the
+`refs/remotes/<remote>/HEAD` symbolic ref is created once and never updated (that
+is git's default, `create`), so the remote's default would keep reading as the old
+name forever. An older git that does not know the setting ignores it, and the
+probe then reports the default as **unknown** rather than stale: a symref pointing
+at a pruned branch is not accepted as an answer.
 
 A fetch that fails does not fail the check: the answer is returned with
 `stale: true`, which the control treats as "the counts may be out of date"
@@ -821,11 +850,64 @@ corrected last commit, and a way back from one that should not have happened.
 
 `branches` is one `for-each-ref` and reports each local branch with its upstream,
 how far it has drifted (`↑2 ↓1`), whether the upstream is gone, and its relative
-date. The menu renders the same list: the checked-out branch is marked `●` and
+date. Remote-tracking branches with no local counterpart are listed after the
+local ones (`on origin only: main`), because those are switchable too and are
+otherwise invisible — a default branch renamed on GitHub is exactly one of them.
+The menu renders the same list: the checked-out branch is marked `●` and
 not clickable, another branch is one click away, and a field creates a new one —
 creation is offered there because it cannot lose anything. **Deleting is
 deliberately not** a menu button: it is the one branch action that can drop
 commits, so it takes a name and, for an unmerged branch, an explicit `--force`.
+
+### A default branch renamed on the remote
+
+GitHub can rename a repository's default branch at any time. A clone that already
+holds the old name keeps holding it, and the new one exists there only as
+`refs/remotes/origin/<new>` — so an old clone is not "on the wrong branch", it is
+on a branch the remote no longer has, tracking a ref that is gone. The plugin
+handles that state rather than guessing past it:
+
+| What you see | What it means |
+|---|---|
+| The badge turns amber with a clean tree | Once a full check has read it, the tracked upstream is gone; the tooltip says `upstream gone`. |
+| `The tracked branch origin/master is gone; the remote default is now main.` | A fetch found the rename. The note sits above the branch rows and states both ends. |
+| `○ master (gone)` | The local branch still exists; nothing has been published to it since the remote dropped it. |
+| `On the remote — ○ main · default` | The remote's new default, offered like any other branch. |
+
+Clicking the remote-only branch runs `git switch -c main --track origin/main`
+(`switch` records `now on main (tracking origin/main)`), so one click reconnects
+the clone to the branch the remote actually uses. `git switch main` alone would
+work by DWIM in most clones, but that DWIM refuses when several remotes have the
+name, so the tracking branch is created explicitly.
+
+Publishing from the **old** branch is refused, not quietly redirected:
+
+```
+push cancelled: the tracked branch origin/master no longer exists on the remote,
+so pushing this branch would recreate it. The remote's default branch is now main
+— switch to it (`/github switch main`). Nothing was pushed; to publish onto that
+name anyway, name the branch explicitly (`/github push <branch>`).
+```
+
+That refusal is the point: `git push` would happily create `master` on the remote
+again, which publishes commits onto a branch nobody merges and makes the remote
+look like it still has the old default. The local commits stay committed either
+way, so stopping costs nothing; `/github push master` is the deliberate way to
+recreate it. **Push** and **Commit & push** share this path, so neither can
+resurrect the old name by accident.
+
+Until something fetches, none of this can be known: a clone cannot see a rename
+that no fetch has reported, and the probe says the old default rather than
+pretending to know better. Turn on `fetchOnStatus`, press **Refresh** in the pane,
+or run **Pull** — those are the three moments that ask the remote. A pull from the
+old branch cannot succeed (the ref it names is gone), so it is refused with the
+same explanation instead of git's bare `couldn't find remote ref master`:
+
+```
+pull cancelled: origin/master no longer exists on the remote. The remote's
+default branch is now main — switch to it (`/github switch main`).
+Nothing was merged or replayed.
+```
 
 Switching uses `git switch` and falls back to `git checkout` on git before 2.23.
 A switch a dirty working tree would overwrite fails with git's reason **and** a

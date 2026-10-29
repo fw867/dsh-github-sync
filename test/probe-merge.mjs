@@ -38,12 +38,18 @@ const t = (key, params) => {
 }
 
 const FULL = {
-  state: 'repo', branch: 'main', dirty: true, ahead: 1, behind: 0, remote: 'origin',
+  state: 'repo', branch: 'master', dirty: true, ahead: 1, behind: 0, remote: 'origin',
   changes: [['src/a.js', ' M'], ['new.txt', '??']], counts: [2, 0],
-  branches: [{ name: 'main', current: true, ahead: 1, behind: 0 }],
+  branches: [{ name: 'master', current: true, ahead: 1, behind: 0, gone: true }],
+  // The branch context is full-answer data: a slim reply says nothing about it,
+  // and the merge must not turn "the upstream is gone" back into silence.
+  remoteDefault: 'main',
+  remoteBranches: [{ name: 'main', default: true }],
+  upstreamGone: true,
+  upstream: 'origin/master',
 }
 const SLIM = {
-  state: 'repo', branch: 'main', dirty: true, ahead: 3, behind: 0, remote: 'origin',
+  state: 'repo', branch: 'master', dirty: true, ahead: 3, behind: 0, remote: 'origin',
   counts: [2, 0],
 }
 
@@ -180,6 +186,19 @@ console.log('=== a full request while a slim check is in flight is queued, not d
   }))
   ok('the change list is there', cached?.changes?.length === 2, cached?.changes)
   ok('the branch list is there', cached?.branches?.length === 1, cached?.branches)
+  ok(
+    'the remote branch context survives the slim answer',
+    cached?.remoteDefault === 'main' &&
+      cached?.upstreamGone === true &&
+      cached?.upstream === 'origin/master' &&
+      cached?.remoteBranches?.[0]?.default === true,
+    {
+      remoteDefault: cached?.remoteDefault,
+      upstreamGone: cached?.upstreamGone,
+      upstream: cached?.upstream,
+      remoteBranches: cached?.remoteBranches,
+    },
+  )
   ok('the waiting panel was woken, not left on checking', internals.probeWakeups.get('s1') === undefined, [...(internals.probeWakeups.get('s1') ?? [])])
 }
 

@@ -91,6 +91,7 @@ window.__ModuleLoader__.load({
       'state.dirty': 'uncommitted changes',
       'state.ahead': '{count} to push',
       'state.behind': '{count} to pull',
+      'state.upstreamGone': 'upstream gone',
       'changes.title': 'Changes',
       'changes.summary': '{total} changed · {staged} staged',
       'changes.truncated': 'showing the first {shown}; more paths changed',
@@ -141,11 +142,17 @@ window.__ModuleLoader__.load({
       'change.staged': 'staged {what}',
       'branches.title': 'Branches',
       'branches.current': 'the branch in use',
+      'branches.gone': '(gone)',
       'branches.switchLabel': 'Switch to {name}',
       'branches.create': 'Create',
       'branches.newLabel': 'New branch name',
       'branches.newPlaceholder': 'feature/name',
       'branches.truncated': 'showing the {shown} most recent; /github branches lists every one',
+      'branches.remoteTitle': 'On the remote',
+      'branches.default': 'default',
+      'branches.remoteTruncated': 'showing the {shown} most recent remote branches',
+      'branches.upstreamGone': 'The tracked branch {upstream} is gone on the remote.',
+      'branches.upstreamGoneDefault': 'The tracked branch {upstream} is gone; the remote default is now {name}.',
       'target.subdirectory': 'repository in {name}',
       'menu.target.label': 'Which repository:',
       'menu.target.entry': 'Repository in {name}',
@@ -199,6 +206,7 @@ window.__ModuleLoader__.load({
       'state.dirty': '有未提交改动',
       'state.ahead': '{count} 个待推送',
       'state.behind': '{count} 个待拉取',
+      'state.upstreamGone': '上游已删除',
       'changes.title': '改动',
       'changes.summary': '共 {total} 项改动 · 已暂存 {staged}',
       'changes.truncated': '只显示前 {shown} 项，还有更多改动',
@@ -248,11 +256,17 @@ window.__ModuleLoader__.load({
       'change.staged': '已暂存{what}',
       'branches.title': '分支',
       'branches.current': '当前所在分支',
+      'branches.gone': '（已删除）',
       'branches.switchLabel': '切换到 {name}',
       'branches.create': '新建',
       'branches.newLabel': '新分支名',
       'branches.newPlaceholder': 'feature/name',
       'branches.truncated': '只显示最近 {shown} 个；/github branches 可列出全部',
+      'branches.remoteTitle': '远程分支',
+      'branches.default': '默认',
+      'branches.remoteTruncated': '只显示最近 {shown} 个远程分支',
+      'branches.upstreamGone': '跟踪的 {upstream} 在远程已不存在。',
+      'branches.upstreamGoneDefault': '跟踪的 {upstream} 在远程已不存在；远程默认分支现在是 {name}。',
       'target.subdirectory': '仓库位于 {name}',
       'menu.target.label': '操作哪个仓库：',
       'menu.target.entry': '{name} 中的仓库',
@@ -638,7 +652,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r50'
+    const BUILD = 'r51'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1375,10 +1389,15 @@ window.__ModuleLoader__.load({
       const ahead = typeof probe.ahead === 'number' && probe.ahead > 0 ? probe.ahead : 0
       const behind = typeof probe.behind === 'number' && probe.behind > 0 ? probe.behind : 0
       const dirty = probe.dirty === true
+      // A tracked upstream that the remote deleted is not "in sync": the counts
+      // simply stopped being reported, which is why it is stated separately. It
+      // is how a default branch renamed on the remote shows up in an old clone.
+      const upstreamGone = probe.upstreamGone === true
       const marks = []
       marks.push(dirty ? t('state.dirty') : t('state.clean'))
       if (ahead > 0) marks.push(t('state.ahead', { count: ahead }))
       if (behind > 0) marks.push(t('state.behind', { count: behind }))
+      if (upstreamGone) marks.push(t('state.upstreamGone'))
       const where = targetLabel(probe, t)
       if (where !== null) marks.push(where)
 
@@ -1387,13 +1406,11 @@ window.__ModuleLoader__.load({
       // once for a diverged branch, because that is the state that needs a
       // decision rather than a single action.
       const arrow = `${ahead > 0 ? ` ↑${ahead}` : ''}${behind > 0 ? ` ↓${behind}` : ''}`
-      const tone = dirty
+      const tone = dirty || upstreamGone || behind > 0
         ? 'var(--dsw-alias-state-warn-primary)'
-        : behind > 0
-          ? 'var(--dsw-alias-state-warn-primary)'
-          : ahead > 0
-            ? 'var(--dsw-alias-brand-primary)'
-            : 'var(--dsw-alias-state-success-primary)'
+        : ahead > 0
+          ? 'var(--dsw-alias-brand-primary)'
+          : 'var(--dsw-alias-state-success-primary)'
       return {
         label: `${branch ?? 'GitHub'}${arrow}`,
         tone,
@@ -1599,6 +1616,9 @@ window.__ModuleLoader__.load({
        * @param targetSession - the session to probe.
        * @param announceFailure - whether to record a failure for the menu to show.
        * @param options.slim - ask for the badge's fields only.
+       * @param options.fetch - ask the Host to fetch first; only the explicit
+       *   Refresh uses it, because it is the one probe that calls the network.
+       * @param options.background - a probe nobody asked for: no state line.
        */
       const refresh = async (targetSession, announceFailure, options) => {
         const address = targetSession ?? sessionId
@@ -1697,7 +1717,12 @@ window.__ModuleLoader__.load({
 
         const choice = targetChoice.get(address)
         const scope = choice === undefined ? '' : ` --dir "${choice}"`
-        const probeLine = `/github status --json${scope}${slim ? ' --slim' : ''}`
+        // `--fetch` only on an explicit refresh: the pane's Refresh button is a
+        // person asking what the remote holds now, which is also the one way a
+        // default branch renamed in the last minute reaches this clone. The
+        // scheduled and mount probes stay local, because they are not questions
+        // about the remote.
+        const probeLine = `/github status --json${scope}${slim ? ' --slim' : ''}${options?.fetch === true ? ' --fetch' : ''}`
         const outcome = await run(
           probeLine,
           { quiet: true, probe: true, signal, background: options?.background === true },
@@ -1730,6 +1755,15 @@ window.__ModuleLoader__.load({
               ...(previous.branches === undefined ? {} : { branches: previous.branches }),
               ...(previous.changesTruncated === undefined ? {} : { changesTruncated: previous.changesTruncated }),
               ...(previous.branchesTruncated === undefined ? {} : { branchesTruncated: previous.branchesTruncated }),
+              // The branch context is full-answer data too: a slim badge check
+              // knows nothing about a gone upstream or a remote-only branch, and
+              // overwriting those with "absent" is what would make the rename
+              // note disappear the next time a session is mounted.
+              ...(previous.remoteDefault === undefined ? {} : { remoteDefault: previous.remoteDefault }),
+              ...(previous.remoteBranches === undefined ? {} : { remoteBranches: previous.remoteBranches }),
+              ...(previous.remoteBranchesTruncated === undefined ? {} : { remoteBranchesTruncated: previous.remoteBranchesTruncated }),
+              ...(previous.upstreamGone === undefined ? {} : { upstreamGone: previous.upstreamGone }),
+              ...(previous.upstream === undefined ? {} : { upstream: previous.upstream }),
             })
           } else {
             probeCache.set(address, parsed)
@@ -2345,6 +2379,31 @@ window.__ModuleLoader__.load({
       const branchList = Array.isArray(probe?.branches)
         ? probe.branches.filter((entry) => typeof entry?.name === 'string' && entry.name.length > 0)
         : []
+      // A branch that exists only on the remote is switchable, and invisible
+      // otherwise. That is exactly the shape a default branch renamed on GitHub
+      // leaves behind: the clone still has the old name locally, and the new one
+      // exists only as a remote-tracking branch until someone switches to it.
+      const remoteList = Array.isArray(probe?.remoteBranches)
+        ? probe.remoteBranches.filter((entry) => typeof entry?.name === 'string' && entry.name.length > 0)
+        : []
+      const remoteDefault =
+        typeof probe?.remoteDefault === 'string' && probe.remoteDefault.length > 0 ? probe.remoteDefault : null
+      const upstreamGone = probe?.upstreamGone === true
+      const upstreamName =
+        typeof probe?.upstream === 'string' && probe.upstream.length > 0 ? probe.upstream : null
+      // A local branch whose upstream was deleted reads as "no drift" unless it is
+      // said out loud. Naming both ends is what makes a renamed default branch
+      // visible before anyone pushes and recreates the old name.
+      const goneNote =
+        upstreamGone && upstreamName !== null
+          ? React.createElement(
+              'div',
+              { key: 'branches-gone', style: S.hint },
+              remoteDefault === null
+                ? t('branches.upstreamGone', { upstream: upstreamName })
+                : t('branches.upstreamGoneDefault', { upstream: upstreamName, name: remoteDefault }),
+            )
+          : null
 
       /** Create the branch named in the field and switch to it. */
       const createBranch = () => {
@@ -2357,10 +2416,11 @@ window.__ModuleLoader__.load({
       }
 
       const branchesPanel =
-        branchList.length === 0
+        branchList.length === 0 && remoteList.length === 0
           ? null
           : [
               React.createElement('div', { key: 'branches-label', style: S.hint }, t('branches.title')),
+              ...(goneNote === null ? [] : [goneNote]),
               ...branchList.map((entry) => {
                 const track = `${entry.ahead > 0 ? ` ↑${entry.ahead}` : ''}${entry.behind > 0 ? ` ↓${entry.behind}` : ''}`
                 return React.createElement(
@@ -2377,9 +2437,34 @@ window.__ModuleLoader__.load({
                       void run(`/github switch "${entry.name}"${dirSuffix(sessionId)}`).then(() => refresh())
                     },
                   },
-                  `${entry.current === true ? '● ' : '○ '}${entry.name}${track}${entry.gone === true ? ' (gone)' : ''}`,
+                  `${entry.current === true ? '● ' : '○ '}${entry.name}${track}${entry.gone === true ? ` ${t('branches.gone')}` : ''}`,
                 )
               }),
+              // The remote-only branches come after the local ones: switching to
+              // one creates the local branch that tracks it, which is the action
+              // that follows a rename on the remote.
+              ...(remoteList.length === 0
+                ? []
+                : [
+                    React.createElement('div', { key: 'branches-remote-label', style: S.hint }, t('branches.remoteTitle')),
+                    ...remoteList.map((entry) =>
+                      React.createElement(
+                        'button',
+                        {
+                          key: `branch-remote-${entry.name}`,
+                          type: 'button',
+                          role: 'menuitem',
+                          title: t('branches.switchLabel', { name: entry.name }),
+                          disabled,
+                          style: style(S.item, disabled ? S.itemDisabled : undefined),
+                          onClick: () => {
+                            void run(`/github switch "${entry.name}"${dirSuffix(sessionId)}`).then(() => refresh())
+                          },
+                        },
+                        `○ ${entry.name}${entry.default === true ? ` · ${t('branches.default')}` : ''}`,
+                      ),
+                    ),
+                  ]),
               React.createElement(
                 'div',
                 { key: 'branch-new', style: S.field },
@@ -2407,6 +2492,9 @@ window.__ModuleLoader__.load({
               ),
               ...(probe?.branchesTruncated === true
                 ? [React.createElement('div', { key: 'branches-more', style: S.hint }, t('branches.truncated', { shown: branchList.length }))]
+                : []),
+              ...(probe?.remoteBranchesTruncated === true
+                ? [React.createElement('div', { key: 'branches-remote-more', style: S.hint }, t('branches.remoteTruncated', { shown: remoteList.length }))]
                 : []),
             ]
 
@@ -2731,7 +2819,7 @@ window.__ModuleLoader__.load({
                   style: style(S.chip, disabled ? S.itemDisabled : undefined),
                   onClick: () => {
                     probeFresh.delete(sessionId)
-                    void refresh(sessionId, true)
+                    void refresh(sessionId, true, { fetch: true })
                   },
                 },
                 t('action.refresh'),
