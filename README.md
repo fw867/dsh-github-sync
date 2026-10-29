@@ -1112,9 +1112,11 @@ The model is the **calling Session's selection** — the one shown in the
 composer — because that is the model the person expects the message to come from.
 `commitProvider`/`commitModel` still win when a deployment wants a dedicated
 cheap utility model. Without either, the deployment default is the last fallback
-for a headless call. The conversation's `reasoningEffort` is intentionally not
-forwarded: `purpose: 'session-title'` keeps this utility call from spending the
-message budget on thinking.
+for a headless call. The Host declares `sessionController` in its `inject`: a
+one-off `ctx.get` missed it on the Hypercar session and fell back to an `openai`
+default that had no adapter at all. The conversation's `reasoningEffort` is
+intentionally not forwarded: `purpose: 'session-title'` keeps this utility call
+from spending the message budget on thinking.
 
 A failed answer is retried before the fallback is taken at all. `commitAttempts`
 (default 3, clamped to 1–5; `1` disables retrying) covers the failures that are

@@ -103,6 +103,12 @@ ok(
 ok('the conversation effort is not forwarded to a utility call', request?.reasoningEffort === undefined, request?.reasoningEffort)
 ok('the prompt still carries the diff', String(request?.messages?.[0]?.content?.[0]?.text ?? '').includes('lib/commit.js'))
 
+console.log('\n=== the Host declares the service that exposes the selection ===')
+{
+  const { inject } = await import(`file:///${PLUGIN.replace(/\\/g, '/')}/index.js`)
+  ok('sessionController is a declared Host dependency', Array.isArray(inject) && inject.includes('sessionController'), inject)
+}
+
 console.log('\n=== without a session controller the deployment default is still valid ===')
 {
   const fallbackRequests = []

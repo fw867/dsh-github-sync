@@ -15,8 +15,13 @@ import { registerTools } from './lib/tools.js'
  */
 export const name = 'github-sync'
 
-/** The tools need the registry and a subprocess seam; the command its registry. */
-export const inject = ['tools', 'subprocess', 'commands']
+/**
+ * The tools need the registry and a subprocess seam; the command its registry.
+ * `sessionController` is what exposes the calling Session's live model
+ * selection, so commit-message generation follows the model shown in the
+ * composer instead of the deployment default.
+ */
+export const inject = ['tools', 'subprocess', 'commands', 'sessionController']
 
 /**
  * Activate the plugin.
