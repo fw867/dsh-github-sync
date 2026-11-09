@@ -120,6 +120,21 @@ console.log('=== the strip keeps what is prose and drops what is a marker ===')
   }
 }
 
+console.log('\n=== a message with a body keeps its body intact ===')
+{
+  const body = 'feat: add the message box\n\n- read the working tree\n- fill the box without committing'
+  const withMarker = withMarkerLine(stripTrailingMarkers(body, ['skip ci']), markerLine(['skip ci']))
+  console.log('with a marker:', JSON.stringify(withMarker))
+  ok('the marker lands on the title line', withMarker.startsWith('feat: add the message box [skip ci]\n\n'), withMarker)
+  ok('the body is untouched', withMarker.endsWith('- read the working tree\n- fill the box without committing'), withMarker)
+
+  const inherited = 'feat: x [release]\n\n- body says [release] too'
+  const stripped = stripTrailingMarkers(inherited, ['skip ci'])
+  console.log('stripped:', JSON.stringify(stripped))
+  ok('only the title line is rewritten', stripped === 'feat: x\n\n- body says [release] too', stripped)
+  ok('a body-only marker is not a title marker', withMarkerLine('feat: y\n\n- body', markerLine(['skip ci'])) === 'feat: y [skip ci]\n\n- body')
+}
+
 console.log('\n=== the recorded message ===')
 {
   const message = await commit('feat: x [release]', undefined)

@@ -64,10 +64,7 @@ const buttonNamed = (node, label) =>
 const integrateToggleOf = (node) =>
   collect(
     node,
-    (n) =>
-      n.type === 'button' &&
-      n.props?.['role'] === 'menuitemcheckbox' &&
-      textOf(n).trim().replace(/^✓\s*/, '') === EN['action.integrate'],
+    (n) => n.type === 'input' && n.props?.type === 'checkbox' && n.props?.['aria-label'] === EN['action.integrate'],
   )[0]
 
 const PROBE = {
@@ -188,27 +185,29 @@ async function openMenu(state) {
   if (trigger === undefined) throw new Error('the control button was not found')
   trigger.props.onClick()
   node = await render()
+  // The commit controls appear once the message box holds a line; a message is
+  // typed the way a person types it, so the switch and the count warning are on
+  // screen before the test asks about them.
+  const box = collect(node, (n) => n.type === 'textarea' && n.props?.['aria-label'] === EN['commit.placeholder'])[0]
+  if (box !== undefined) {
+    box.props.onChange({ target: { value: 'chore: test the auto-rebase switch' } })
+    node = await render(2)
+  }
   return {
     node: () => node,
     render,
-    click: async (button) => {
-      if (button === undefined) throw new Error('the button was not found')
-      button.props.onClick()
+    click: async (control) => {
+      if (control === undefined) throw new Error('the control was not found')
+      // A checkbox reports a change; a button reports a click.
+      if (typeof control.props.onChange === 'function') control.props.onChange({ target: { checked: true } })
+      else control.props.onClick()
       node = await render(2)
       return node
     },
-    enterSyncStep: async () => {
-      const enter = buttonNamed(node, EN['action.sync'])
-      if (enter === undefined) {
-        throw new Error(`no Commit & push button; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
-      }
-      enter.props.onClick()
-      node = await render()
-      return node
-    },
+    enterSyncStep: async () => node,
     confirm: async () => {
-      const confirm = collect(node, (n) => n.type === 'button' && /Confirm/.test(textOf(n))).pop()
-      if (confirm === undefined) throw new Error('no Confirm button')
+      const confirm = buttonNamed(node, EN['action.sync'])
+      if (confirm === undefined) throw new Error('no Commit & push button')
       confirm.props.onClick()
       await render(3)
     },
@@ -239,14 +238,14 @@ console.log('\n=== the switch is visible, reflects a config of false, and is rem
   const menu = await openMenu(state)
   let toggle = integrateToggleOf(menu.node())
   ok('the switch is in the menu', toggle !== undefined)
-  ok('it starts from the deployment setting', toggle?.props?.['aria-checked'] === false, toggle?.props?.['aria-checked'])
+  ok('it starts from the deployment setting', toggle?.props?.checked === false, toggle?.props?.checked)
   await menu.click(toggle)
   toggle = integrateToggleOf(menu.node())
-  ok('a click checks it', toggle?.props?.['aria-checked'] === true, toggle?.props?.['aria-checked'])
+  ok('a click checks it', toggle?.props?.checked === true, toggle?.props?.checked)
   ok(
-    'the on state is green',
-    String(toggle?.props?.style?.background ?? '').includes('state-success-primary'),
-    toggle?.props?.style,
+    'the control is a checkbox, not a button that has to be read as one',
+    toggle?.type === 'input' && toggle?.props?.type === 'checkbox',
+    toggle?.props,
   )
   ok('the choice is written for the next page', store.getItem('dsh-github-sync:integrate-before-push') === 'true', store.raw)
 
@@ -263,10 +262,10 @@ console.log('\n=== a deployment setting of true is the default, and a click can 
   const state = boot({ probeBody: { ...PROBE, integrateBeforePush: true } })
   const menu = await openMenu(state)
   let toggle = integrateToggleOf(menu.node())
-  ok('the switch follows the deployment setting', toggle?.props?.['aria-checked'] === true, toggle?.props?.['aria-checked'])
+  ok('the switch follows the deployment setting', toggle?.props?.checked === true, toggle?.props?.checked)
   await menu.click(toggle)
   toggle = integrateToggleOf(menu.node())
-  ok('clicking it turns it off', toggle?.props?.['aria-checked'] === false, toggle?.props?.['aria-checked'])
+  ok('clicking it turns it off', toggle?.props?.checked === false, toggle?.props?.checked)
   await menu.enterSyncStep()
   await menu.confirm()
   const lines = syncLines(state)
@@ -279,7 +278,7 @@ console.log('\n=== untouched, the command carries no override ===')
   const state = boot({ probeBody: { ...PROBE, integrateBeforePush: true } })
   const menu = await openMenu(state)
   const toggle = integrateToggleOf(menu.node())
-  ok('the switch shows the deployment setting', toggle?.props?.['aria-checked'] === true, toggle?.props?.['aria-checked'])
+  ok('the switch shows the deployment setting', toggle?.props?.checked === true, toggle?.props?.checked)
   await menu.enterSyncStep()
   await menu.confirm()
   const lines = syncLines(state)
@@ -293,7 +292,7 @@ console.log('\n=== clicking back to the deployment value forgets the override ==
   const state = boot({ store, probeBody: { ...PROBE, integrateBeforePush: true } })
   const menu = await openMenu(state)
   const toggle = integrateToggleOf(menu.node())
-  ok('the stored choice wins over the deployment', toggle?.props?.['aria-checked'] === false, toggle?.props?.['aria-checked'])
+  ok('the stored choice wins over the deployment', toggle?.props?.checked === false, toggle?.props?.checked)
   await menu.click(toggle)
   ok('the stored override is removed', !store.raw.has('dsh-github-sync:integrate-before-push'), store.raw)
   await menu.enterSyncStep()

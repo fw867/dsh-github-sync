@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The jump out of the menu to the project's GitHub page.
  *
  * The Host normalizes the configured remote into a browsable address and the
@@ -261,19 +261,22 @@ console.log('\n=== the control renders the item from the probe ===')
   ok('it points at the project page', link?.props?.href === PROBE.web, link?.props)
   ok('it opens a new top-level context', link?.props?.target === '_blank', link?.props)
   ok('the opener cannot reach back', link?.props?.rel === 'noopener noreferrer', link?.props)
-  ok('its label is the localized action', textOf(link) === EN['action.openWeb'], textOf(link))
+  ok('its label is the localized action', link?.props?.['aria-label'] === EN['action.openWeb'], link?.props?.['aria-label'])
+  // The jump moved into the title bar: it is inside the first row, above the
+  // repository-detected line and beside pull and refresh.
   const children = Array.isArray(node?.children) ? node.children : []
-  const linkIndex = children.findIndex((child) => child.type === 'a' && child.props?.href === PROBE.web)
-  const stateIndex = children.findIndex((child) => textOf(child).includes(EN['menu.found']))
+  const head = children[0]
+  const inHead = collect(head, (n) => n.type === 'a' && n.props?.href === PROBE.web).length > 0
+  const stateAfterHead = children.slice(1).some((child) => textOf(child).includes(EN['menu.found']))
   ok(
-    'the jump sits above the repository-detected line',
-    linkIndex >= 0 && stateIndex >= 0 && linkIndex < stateIndex,
-    { linkIndex, stateIndex },
+    'the jump sits in the title bar, above the repository-detected line',
+    inHead && stateAfterHead,
+    { inHead, stateAfterHead },
   )
 
   const noWeb = boot({ ...PROBE, remote: '/srv/git/widget.git', web: null })
   const noWebNode = await mountPane(noWeb)
-  const deadLink = collect(noWebNode, (n) => n.type === 'a' && n.props?.role === 'menuitem')[0]
+  const deadLink = collect(noWebNode, (n) => n.type === 'a')[0]
   ok('a repository with no page offers no item', deadLink === undefined, deadLink?.props)
 }
 

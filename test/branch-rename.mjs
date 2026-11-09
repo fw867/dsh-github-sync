@@ -391,16 +391,19 @@ console.log('\n=== the panel draws the renamed default and offers the switch ===
   console.log('panel text:', JSON.stringify(text))
   ok('the panel says the tracked branch is gone', text.includes('origin/master') && /gone/i.test(text), text)
   ok('and names the new remote default', text.includes('main'), text)
-  const remoteRow = collect(node, (n) => n.type === 'button' && /main/.test(textOf(n)) && n.props?.title === `Switch to main`)[0]
-  ok('the remote-only branch is a switch button', remoteRow !== undefined, collect(node, (n) => n.type === 'button').map(textOf))
-  if (remoteRow !== undefined) {
-    remoteRow.props.onClick()
+  // The branches are one select now: the remote-only name is an entry in it, and
+  // choosing it is the switch.
+  const branchSelect = collect(node, (n) => n.type === 'select' && n.props?.['aria-label'] === EN['branches.title'])[0]
+  const remoteOption = collect(branchSelect, (n) => n.type === 'option' && n.props?.value === 'main')[0]
+  ok('the remote-only branch is an entry in the branch list', remoteOption !== undefined, branchSelect?.children?.map((child) => child.props?.value))
+  if (branchSelect !== undefined) {
+    branchSelect.props.onChange({ target: { value: 'main' } })
     await new Promise((resolve) => setTimeout(resolve, 40))
   }
   ok('clicking it issues the switch', issued.some((line) => /\/github switch "main"/.test(line)), issued)
   // The Refresh button is the one action that asks the remote now, which is how a
   // deployment without `fetchOnStatus` ever learns about the rename.
-  const refreshButton = collect(node, (n) => n.type === 'button' && textOf(n).trim() === EN['action.refresh'])[0]
+  const refreshButton = collect(node, (n) => n.type === 'button' && n.props?.['aria-label'] === EN['action.refresh'])[0]
   ok('the pane offers a refresh button', refreshButton !== undefined, collect(node, (n) => n.type === 'button').map(textOf))
   if (refreshButton !== undefined) {
     refreshButton.props.onClick()

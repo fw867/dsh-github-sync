@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The CI-marker control: what the menu says, and what the command carries.
  *
  * Both halves matter. The command line is what the Host acts on, so it is what is
@@ -163,13 +163,22 @@ async function enterStep(state) {
   if (trigger === undefined) throw new Error(`the control button was not found; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
   trigger.props.onClick()
   node = await render()
-  const enter = buttonNamed(node, EN['action.sync'])
-  if (enter === undefined) throw new Error(`no commit button; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
-  enter.props.onClick()
-  node = await render()
+  // Keep the panel as it renders before a message exists: the marker controls
+  // describe a title, so they must not be there yet.
+  const emptyNode = node
+  // The commit controls appear once the message box holds something; a message is
+  // what a marker is appended to, so it is typed the way a person types it.
+  const box = collect(node, (n) => n.type === 'textarea' && n.props?.['aria-label'] === EN['commit.placeholder'])[0]
+  if (box === undefined) {
+    throw new Error(`no message box; have ${JSON.stringify(collect(node, (n) => n.type === 'textarea').map((n) => n.props))}`)
+  }
+  box.props.onChange({ target: { value: 'chore: test the marker control' } })
+  node = await render(2)
   return {
     node: () => node,
     panel: () => textOf(node),
+    emptyPanel: () => textOf(emptyNode),
+    message: () => collect(node, (n) => n.type === 'textarea')[0]?.props?.value ?? '',
     toggle: async (name) => {
       const chip = chipNamed(node, name)
       if (chip === undefined) throw new Error(`no chip [${name}]`)
@@ -183,10 +192,10 @@ async function enterStep(state) {
       node = await render(2)
     },
     clickConfirm: async () => {
-      const confirm = collect(node, (n) =>
-        n.type === 'button' && !/^\[/.test(textOf(n).trim()) && /Confirm|Commit/.test(textOf(n)),
-      ).pop()
-      if (confirm === undefined) throw new Error(`no confirming button; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
+      const confirm = buttonNamed(node, EN['action.sync'])
+      if (confirm === undefined) {
+        throw new Error(`no commit button; have ${JSON.stringify(collect(node, (n) => n.type === 'button').map((n) => textOf(n).trim()))}`)
+      }
       confirm.props.onClick()
       await render(3)
     },
@@ -200,6 +209,7 @@ console.log('=== nothing selected: no marker, and the panel says so ===')
   const step = await enterStep(state)
   console.log('panel marker line:', JSON.stringify((step.panel().match(/No marker will be added\.|Will add: [^\n]*/) ?? [])[0] ?? null))
   ok('the panel states that nothing will be added', step.panel().includes(EN['commit.markerNone']), step.panel().slice(0, 300))
+  ok('the marker controls wait for a message', !step.emptyPanel().includes(EN['commit.markers']), step.emptyPanel().slice(0, 200))
   ok('no Clear control is offered when there is nothing to clear',
     buttonNamed(step.node(), EN['commit.markerClear']) === undefined)
   await step.clickConfirm()
@@ -219,6 +229,7 @@ console.log('\n=== selecting one: appended once, and the panel states it ===')
     step.panel().includes(t('commit.markerWillAdd', { markers: '[release]' })), step.panel().slice(0, 300))
   ok('the chip carries the tick', textOf(chipNamed(step.node(), 'release')).trim() === '✓ [release]',
     textOf(chipNamed(step.node(), 'release')).trim())
+  ok('ticking a chip writes the marker into the title', step.message() === 'chore: test the marker control [release]', step.message())
   await step.clickConfirm()
   const lines = commitLines(state)
   console.log('commit line:', JSON.stringify(lines))
@@ -236,6 +247,7 @@ console.log('\n=== selecting then deselecting: nothing is appended ===')
   ok('the tick is gone', textOf(chipNamed(step.node(), 'release')).trim() === '[release]',
     textOf(chipNamed(step.node(), 'release')).trim())
   ok('the panel says nothing will be added', step.panel().includes(EN['commit.markerNone']))
+  ok('unticking takes the marker back out of the title', step.message() === 'chore: test the marker control', step.message())
   await step.clickConfirm()
   const lines = commitLines(state)
   console.log('commit line:', JSON.stringify(lines))
@@ -287,8 +299,8 @@ console.log('\n=== the Clear control empties both the chips and the free-text fi
       S.index = 0
       n = Component(props)
     }
-    const confirm = collect(n, (x) => x.type === 'button' && /Confirm/.test(textOf(x))).pop()
-    confirm.props.onClick()
+    const confirm = collect(n, (x) => x.type === 'button' && /Confirm|Commit/.test(textOf(x))).pop()
+    confirm?.props?.onClick()
     await settle(120)
   }
   const lines = commitLines(state)
@@ -306,6 +318,7 @@ console.log('\n=== the free-text field alone is enough to add one ===')
   const step = await enterStep(state)
   await step.typeOthers('hotfix, deploy')
   ok('the panel lists both', step.panel().includes('[hotfix] [deploy]'), (step.panel().match(/Will add: [^\n]*/) ?? [])[0])
+  ok('the field writes them into the title', step.message() === 'chore: test the marker control [hotfix] [deploy]', step.message())
   await step.clickConfirm()
   const lines = commitLines(state)
   console.log('commit line:', JSON.stringify(lines))

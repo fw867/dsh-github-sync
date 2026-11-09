@@ -1,4 +1,4 @@
-window.__ModuleLoader__.load({
+﻿window.__ModuleLoader__.load({
   id: 'dsh-github-sync',
   factory(require) {
     const React = require('react')
@@ -96,11 +96,17 @@ window.__ModuleLoader__.load({
       'changes.summary': '{total} changed · {staged} staged',
       'changes.truncated': 'showing the first {shown}; more paths changed',
       'changes.diff': 'Diff',
+      'changes.includeDir': 'Include every change under {path} in the next commit',
+      'changes.expand': 'Expand {path}',
+      'changes.collapse': 'Collapse {path}',
       'diff.unknownPath': 'changed file',
       'diff.noText': 'No line-by-line comparison is available for this file.',
       'diff.tabTitle': 'Diff: {path}',
       'diff.chip': 'Diff',
       'diff.noPath': 'This tab has no file to compare.',
+      'diff.viewLabel': 'Diff layout',
+      'diff.view.unified': 'Unified',
+      'diff.view.split': 'Split',
       'changes.diffLabel': 'Show the diff of {path}',
       'changes.noneSelected': 'Nothing is selected, so there is nothing to commit. Tick at least one path.',
       'changes.selected': '{count} of {total} selected for the next commit',
@@ -110,6 +116,10 @@ window.__ModuleLoader__.load({
       'changes.hidden': '{count} change(s) are not listed: a file git does not track yet, or a path .gitignore excludes. `git add` the file if it belongs in the next commit.',
       'changes.clean': 'Nothing tracked has changed.',
       'commit.options': 'Commit message',
+      'commit.placeholder': 'Commit message — the first line becomes the subject',
+      'commit.ai': 'Write the message with AI',
+      'commit.aiBusy': 'Writing a message…',
+      'commit.aiEmpty': 'The model returned no message; type one instead.',
       'commit.mode.ai': 'AI generated',
       'commit.mode.custom': 'Write my own',
       'commit.customPlaceholder': 'First line is the subject; later lines become the body',
@@ -147,6 +157,7 @@ window.__ModuleLoader__.load({
       'branches.create': 'Create',
       'branches.newLabel': 'New branch name',
       'branches.newPlaceholder': 'feature/name',
+      'branches.newOption': '+ New branch…',
       'branches.truncated': 'showing the {shown} most recent; /github branches lists every one',
       'branches.remoteTitle': 'On the remote',
       'branches.default': 'default',
@@ -211,11 +222,17 @@ window.__ModuleLoader__.load({
       'changes.summary': '共 {total} 项改动 · 已暂存 {staged}',
       'changes.truncated': '只显示前 {shown} 项，还有更多改动',
       'changes.diff': '差异',
+      'changes.includeDir': '把 {path} 下的所有改动纳入下次提交',
+      'changes.expand': '展开 {path}',
+      'changes.collapse': '收起 {path}',
       'diff.unknownPath': '改动的文件',
       'diff.noText': '该文件没有可逐行对比的内容。',
       'diff.tabTitle': '差异：{path}',
       'diff.chip': '差异',
       'diff.noPath': '这个标签页没有可对比的文件。',
+      'diff.viewLabel': '差异布局',
+      'diff.view.unified': '统一',
+      'diff.view.split': '分栏',
       'changes.diffLabel': '查看 {path} 的差异',
       'changes.noneSelected': '没有选中任何文件，无法提交。请至少勾选一项。',
       'changes.selected': '已选中 {count}/{total} 项，将进入下次提交',
@@ -225,6 +242,10 @@ window.__ModuleLoader__.load({
       'changes.hidden': '另有 {count} 个改动未列出：尚未被 git 跟踪的文件，或已被 .gitignore 排除的路径。要让它进入本次提交，请先 `git add` 它。',
       'changes.clean': '已跟踪的文件没有改动。',
       'commit.options': '提交信息',
+      'commit.placeholder': '提交信息（首行即标题）',
+      'commit.ai': '用 AI 生成提交信息',
+      'commit.aiBusy': '正在生成提交信息…',
+      'commit.aiEmpty': '模型没有返回信息，请手动填写。',
       'commit.mode.ai': 'AI 生成',
       'commit.mode.custom': '自定义',
       'commit.customPlaceholder': '首行是标题，后续行会成为正文',
@@ -261,6 +282,7 @@ window.__ModuleLoader__.load({
       'branches.create': '新建',
       'branches.newLabel': '新分支名',
       'branches.newPlaceholder': 'feature/name',
+      'branches.newOption': '＋ 新建分支…',
       'branches.truncated': '只显示最近 {shown} 个；/github branches 可列出全部',
       'branches.remoteTitle': '远程分支',
       'branches.default': '默认',
@@ -281,25 +303,6 @@ window.__ModuleLoader__.load({
       'error.probeFailed': '工作区检查失败：{reason}',
       'error.probeUnexpected': '工作区检查返回了意外的结果。',
     }
-
-    /** Actions offered when the workspace already holds a repository. */
-    const REPO_ACTIONS = [
-      { id: 'status', key: 'action.refresh' },
-      { id: 'pull', key: 'action.pull' },
-      { id: 'sync', key: 'action.sync' },
-      { id: 'push', key: 'action.push' },
-    ]
-
-    /**
-     * Actions offered for a repository that has no remote.
-     *
-     * Publishing cannot succeed without one, so the menu drops both push
-     * entries and keeps what a local repository can still do.
-     */
-    const CONNECT_ACTIONS = [
-      { id: 'status', key: 'action.refresh' },
-      { id: 'commit', key: 'action.commit' },
-    ]
 
     /**
      * Last known workspace state, per session.
@@ -574,6 +577,17 @@ window.__ModuleLoader__.load({
         targetChoice,
         parseUnifiedDiff,
         DiffView,
+        // The tree and the patch's row model: pure, and the units worth
+        // asserting on — the list's shape and a rewritten line's pairing are
+        // exactly the parts a screenshot cannot check.
+        statusOfCode,
+        buildChangeTree,
+        flattenChangeTree,
+        inlineSegments,
+        pairModifiedRows,
+        splitHunkRows,
+        preparePatch,
+        ChangesTree,
       }
     }
 
@@ -652,7 +666,7 @@ window.__ModuleLoader__.load({
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r51'
+    const BUILD = 'r56'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -702,7 +716,7 @@ window.__ModuleLoader__.load({
       },
       head: {
         display: 'flex',
-        alignItems: 'baseline',
+        alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
         padding: '4px 8px 6px',
@@ -711,6 +725,40 @@ window.__ModuleLoader__.load({
         lineHeight: '16px',
       },
       headTitle: { color: 'var(--dsw-alias-label-primary)', fontSize: 12 },
+      /** The build · revision stamp, kept to the space it needs. */
+      headState: { flex: '0 0 auto', color: 'var(--dsw-alias-label-tertiary)', fontSize: 10 },
+      /** The branch row: a label, one select, and the new-branch control. */
+      branchRow: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 4px' },
+      branchLabel: { flex: '0 0 auto', color: 'var(--dsw-alias-label-secondary)', fontSize: 11 },
+      select: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        height: 24,
+        padding: '0 4px',
+        boxSizing: 'border-box',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 6,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontSize: 12,
+      },
+      /** The message box and its AI button, side by side. */
+      commitField: { display: 'flex', alignItems: 'stretch', gap: 6, padding: '2px 8px 6px' },
+      commitInput: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        minHeight: 44,
+        padding: '6px 8px',
+        boxSizing: 'border-box',
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        borderRadius: 8,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'inherit',
+        fontSize: 12,
+        lineHeight: '17px',
+        resize: 'vertical',
+      },
       item: {
         display: 'block',
         width: '100%',
@@ -728,39 +776,6 @@ window.__ModuleLoader__.load({
       },
       itemDisabled: { color: 'var(--dsw-alias-state-idle-primary)', cursor: 'default' },
       /** The action whose message is being decided right now. */
-      itemPending: { color: 'var(--dsw-alias-brand-primary)', fontWeight: 600 },
-      changeRow: {
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 6,
-        padding: '1px 8px',
-      },
-      changePath: {
-        // A path is shown in full. Truncating it to one ellipsised line hid
-        // exactly the part that distinguishes two similar files, and the widened
-        // menu means most paths fit on one line anyway. Long ones wrap; `break-all`
-        // is deliberate, because a path has no spaces to break at.
-        flex: '1 1 auto',
-        minWidth: 0,
-        color: 'var(--dsw-alias-label-primary)',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        fontSize: 11,
-        lineHeight: '16px',
-        whiteSpace: 'normal',
-        wordBreak: 'break-all',
-      },
-      changeAction: {
-        flex: '0 0 auto',
-        height: 20,
-        padding: '0 6px',
-        border: '0.5px solid var(--dsw-alias-border-l2)',
-        borderRadius: 4,
-        background: 'transparent',
-        color: 'var(--dsw-alias-label-secondary)',
-        fontSize: 11,
-        lineHeight: '14px',
-        cursor: 'pointer',
-      },
       hint: {
         padding: '2px 8px 6px',
         color: 'var(--dsw-alias-label-secondary)',
@@ -883,14 +898,7 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-brand-primary)',
         fontWeight: 600,
       },
-      /** The auto-rebase switch reads as "green means protected" when on. */
-      chipOnGreen: {
-        borderColor: 'var(--dsw-alias-state-success-primary)',
-        background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 18%, transparent)',
-        color: 'var(--dsw-alias-state-success-primary)',
-        fontWeight: 600,
-      },
-      /** The one chip that carries the step through: the commit itself. */
+      /** The one chip that carries the commit itself. */
       chipConfirm: {
         flex: '0 0 auto',
         padding: '4px 12px',
@@ -905,20 +913,6 @@ window.__ModuleLoader__.load({
         lineHeight: '16px',
         fontWeight: 600,
         cursor: 'pointer',
-      },
-      customMessage: {
-        margin: '2px 8px 4px',
-        minHeight: 46,
-        padding: '6px 8px',
-        boxSizing: 'border-box',
-        border: '0.5px solid var(--dsw-alias-border-l2)',
-        borderRadius: 6,
-        background: 'transparent',
-        color: 'var(--dsw-alias-label-primary)',
-        fontFamily: 'inherit',
-        fontSize: 12,
-        lineHeight: '17px',
-        resize: 'vertical',
       },
       markerInput: {
         flex: '1 1 120px',
@@ -947,72 +941,6 @@ window.__ModuleLoader__.load({
         color: 'var(--dsw-alias-label-primary)',
         fontSize: 13,
       },
-      // A patch is read, not glanced at, so it is a block of its own rather than
-      // the tail of the action log: a header naming the path and counting the
-      // change, then the hunks.
-      diff: {
-        display: 'flex',
-        flexDirection: 'column',
-        boxSizing: 'border-box',
-        margin: '4px 0 0',
-        border: '0.5px solid var(--dsw-alias-border-l1)',
-        borderRadius: 6,
-        overflow: 'hidden',
-        background: 'var(--dsw-alias-bg-base)',
-      },
-      diffHead: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '4px 8px',
-        borderBottom: '0.5px solid var(--dsw-alias-border-l1)',
-        background: 'var(--dsw-alias-bg-layer-2)',
-        fontSize: 11,
-        lineHeight: '16px',
-      },
-      diffPath: {
-        flex: '1 1 auto',
-        minWidth: 0,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        color: 'var(--dsw-alias-label-primary)',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      },
-      diffStat: { flex: '0 0 auto', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
-      diffBody: {
-        // The pane already scrolls; this bounds its own scroll so a long patch
-        // cannot push the change list out of reach in the popup.
-        maxHeight: 'min(46vh, 420px)',
-        overflow: 'auto',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-        fontSize: 11,
-        lineHeight: '16px',
-      },
-      diffHunk: {
-        padding: '2px 8px',
-        color: 'var(--dsw-alias-label-secondary)',
-        background: 'var(--dsw-alias-bg-layer-1)',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
-      },
-      diffRow: { display: 'flex', alignItems: 'flex-start', whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
-      diffGutter: {
-        flex: '0 0 auto',
-        width: 34,
-        padding: '0 6px 0 0',
-        textAlign: 'right',
-        color: 'var(--dsw-alias-state-idle-primary)',
-        userSelect: 'none',
-        fontVariantNumeric: 'tabular-nums',
-      },
-      diffSign: { flex: '0 0 auto', width: 12, textAlign: 'center', userSelect: 'none' },
-      diffText: { flex: '1 1 auto', minWidth: 0, paddingRight: 8 },
-      diffAdd: { background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent)' },
-      diffDel: { background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent)' },
-      diffAddText: { color: 'var(--dsw-alias-state-success-primary)' },
-      diffDelText: { color: 'var(--dsw-alias-state-error-primary)' },
-      diffNote: { padding: '4px 8px', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, lineHeight: '16px' },
     }
 
     /** Merge the base control style with a conditional override. */
@@ -1043,6 +971,9 @@ window.__ModuleLoader__.load({
     function parseUnifiedDiff(raw) {
       if (typeof raw !== 'string' || raw.length === 0) return null
       const lines = raw.split('\n')
+      // A patch ends with its last line's newline, so the split leaves one empty
+      // trailing field — not a line of the patch.
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
       let path = null
       let binary = false
       let additions = 0
@@ -1054,7 +985,9 @@ window.__ModuleLoader__.load({
       let sawHeader = false
 
       for (const line of lines) {
-        const body = line.startsWith(DIFF_INDENT) ? line.slice(DIFF_INDENT.length) : line
+        // A CRLF file leaves its carriage return inside the line content; it is
+        // invisible in the patch and would render as a trailing blank cell.
+        const body = (line.startsWith(DIFF_INDENT) ? line.slice(DIFF_INDENT.length) : line).replace(/\r$/, '')
         if (body.startsWith('diff --git ')) {
           // `diff --git a/<path> b/<path>`: the b-side is the file as it will be.
           sawHeader = true
@@ -1107,58 +1040,325 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * How two versions of one line differ, as runs a reader can see.
+     *
+     * The pair of a rewritten line is the one place a word-level comparison is
+     * worth its cost: the common prefix and suffix are trimmed, and what stays
+     * in the middle is what actually changed. Character-level trimming is
+     * enough — a token diff would need a tokenizer per language, and the point
+     * here is to make the change visible, not to name it.
+     *
+     * @param oldText - the removed line, without its sign.
+     * @param newText - the added line, without its sign.
+     * @returns `{ old, new }`, each a run list of `{ text, changed }`.
+     */
+    function inlineSegments(oldText, newText) {
+      const before = String(oldText ?? '')
+      const after = String(newText ?? '')
+      const limit = Math.min(before.length, after.length)
+      let prefix = 0
+      while (prefix < limit && before[prefix] === after[prefix]) prefix += 1
+      let suffix = 0
+      while (suffix < limit - prefix && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) {
+        suffix += 1
+      }
+      const runs = (text) => {
+        const head = text.slice(0, prefix)
+        const body = text.slice(prefix, text.length - suffix)
+        const tail = text.slice(text.length - suffix)
+        const out = []
+        if (head.length > 0) out.push({ text: head, changed: false })
+        if (body.length > 0) out.push({ text: body, changed: true })
+        if (tail.length > 0) out.push({ text: tail, changed: false })
+        return out
+      }
+      return { old: runs(before), new: runs(after) }
+    }
+
+    /**
+     * Pair the removed lines of a hunk with the added ones that replace them.
+     *
+     * Git reports a rewritten line as a removal followed by an addition, and
+     * rendering those as two unrelated rows is what makes a one-word edit look
+     * like a one-line replacement. A deletion run immediately followed by an
+     * addition run is therefore paired index by index, up to the shorter of the
+     * two, and only the paired rows carry the intra-line runs — an unpaired
+     * removal is a deletion, not a rewrite, and must not claim to be one.
+     *
+     * @param rows - one hunk's parsed rows.
+     * @returns the same rows, paired ones carrying `inline` run lists.
+     */
+    function pairModifiedRows(rows) {
+      const out = rows.map((row) => ({ ...row }))
+      let index = 0
+      while (index < out.length) {
+        if (out[index].kind !== 'del') {
+          index += 1
+          continue
+        }
+        const firstDel = index
+        while (index < out.length && out[index].kind === 'del') index += 1
+        const firstAdd = index
+        while (index < out.length && out[index].kind === 'add') index += 1
+        const removed = out.slice(firstDel, firstAdd)
+        const added = out.slice(firstAdd, index)
+        const pairs = Math.min(removed.length, added.length)
+        for (let offset = 0; offset < pairs; offset += 1) {
+          const segments = inlineSegments(removed[offset].text, added[offset].text)
+          removed[offset].inline = segments.old
+          added[offset].inline = segments.new
+        }
+      }
+      return out
+    }
+
+    /**
+     * Fold two aligned versions of one hunk into the side-by-side model.
+     *
+     * A context row is the same row on both sides. A rewritten pair is one row
+     * with a left and a right half. What has no counterpart — a pure deletion or
+     * a pure addition — keeps one half empty, which is what makes the missing
+     * side visible rather than invented.
+     *
+     * @param rows - one hunk's paired rows.
+     * @returns rows of `{ left?, right?, note? }`.
+     */
+    function splitHunkRows(rows) {
+      const out = []
+      let index = 0
+      while (index < rows.length) {
+        const row = rows[index]
+        if (row.kind === 'ctx') {
+          out.push({ left: row, right: row })
+          index += 1
+          continue
+        }
+        if (row.kind === 'note') {
+          out.push({ note: row })
+          index += 1
+          continue
+        }
+        const removed = []
+        const added = []
+        while (index < rows.length && rows[index].kind === 'del') {
+          removed.push(rows[index])
+          index += 1
+        }
+        while (index < rows.length && rows[index].kind === 'add') {
+          added.push(rows[index])
+          index += 1
+        }
+        // A row that is neither a deletion nor an addition ends the run; without
+        // this guard an unknown kind would loop here forever.
+        if (removed.length === 0 && added.length === 0) {
+          out.push({ left: row })
+          index += 1
+          continue
+        }
+        const pairs = Math.min(removed.length, added.length)
+        for (let offset = 0; offset < pairs; offset += 1) {
+          out.push({ left: removed[offset], right: added[offset] })
+        }
+        for (let offset = pairs; offset < removed.length; offset += 1) out.push({ left: removed[offset] })
+        for (let offset = pairs; offset < added.length; offset += 1) out.push({ right: added[offset] })
+      }
+      return out
+    }
+
+    /**
+     * The patch as the renderer needs it: each hunk's rows paired once.
+     *
+     * Parsing is cheap and pairing is not free, so it happens here rather than
+     * inside a row renderer — once per patch, not once per row.
+     *
+     * @param patch - a parsed patch.
+     * @returns the patch with `hunks[].rows` paired, or null.
+     */
+    function preparePatch(patch) {
+      if (patch === null || patch === undefined) return null
+      return {
+        ...patch,
+        hunks: patch.hunks.map((hunk) => ({ header: hunk.header, rows: pairModifiedRows(hunk.rows) })),
+      }
+    }
+
+    /** The runs of a paired row as text and highlight spans. */
+    function inlineChildren(row, changedClass) {
+      if (!Array.isArray(row.inline)) return row.text
+      return row.inline.map((run, index) =>
+        run.changed === true
+          ? React.createElement('span', { key: `run-${index}`, className: changedClass }, run.text)
+          : run.text,
+      )
+    }
+
+    /**
      * One file's patch, as a block: where it is, how much changed, and the hunks.
      *
      * Both callers share the engine's outcome text, so the patch is parsed here
      * rather than fetched again — the command has already run by the time this
-     * renders.
+     * renders. The layout is a choice the reader makes: the unified view matches
+     * a terminal's `git diff`, and the split view puts a rewritten line's two
+     * versions side by side so the change is one row rather than two.
+     *
+     * @param patch - `parseUnifiedDiff`'s answer.
+     * @param t - the bound translate function.
+     * @param fill - true inside a tab, where the pane scrolls the whole patch
+     *   rather than a bounded box inside a bounded menu.
+     * @param initialMode - the layout to open in; a reader's toggle wins after.
      */
-    function DiffView({ patch, t }) {
+    /**
+     * The last layout a reader picked, shared by every diff surface.
+     *
+     * A patch opened from the list and a patch opened from the tab use the same
+     * renderer, and a reader who chose split once expects the next file to open
+     * the same way. Keeping it module-level rather than per instance is what
+     * makes that hold across two tabs that are mounted at different times.
+     */
+    let preferredDiffLayout = 'unified'
+
+    function DiffView({ patch, t, fill, initialMode }) {
+      // A diff tab can be the only surface this plugin has mounted — restored on
+      // its own, with the repository panel never opened — so the sheet is ensured
+      // here too, not only by the list.
+      ensureStyles()
+      const [mode, setMode] = React.useState(
+        initialMode === 'split' || initialMode === 'unified' ? initialMode : preferredDiffLayout,
+      )
+      const chooseMode = (next) => {
+        preferredDiffLayout = next
+        setMode(next)
+      }
+      const prepared = preparePatch(patch)
       const head = React.createElement(
         'div',
-        { style: S.diffHead },
-        React.createElement('span', { style: S.diffPath, title: patch.path ?? '' }, patch.path ?? t('diff.unknownPath')),
+        { className: 'gsy-diffhead' },
+        React.createElement('span', { className: 'gsy-diffpath', title: patch.path ?? '' }, patch.path ?? t('diff.unknownPath')),
         React.createElement(
           'span',
-          { style: S.diffStat },
-          React.createElement('span', { style: S.diffAddText }, `+${patch.additions}`),
+          { className: 'gsy-diffstat' },
+          React.createElement('span', { className: 'gsy-stat-add' }, `+${patch.additions}`),
           ' ',
-          React.createElement('span', { style: S.diffDelText }, `−${patch.deletions}`),
+          React.createElement('span', { className: 'gsy-stat-del' }, `−${patch.deletions}`),
         ),
+        patch.binary === true || (prepared !== null && prepared.hunks.length === 0)
+          ? null
+          : React.createElement(
+              'span',
+              { className: 'gsy-seg', role: 'group', 'aria-label': t('diff.viewLabel') },
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  'aria-pressed': mode === 'unified',
+                  title: t('diff.view.unified'),
+                  onClick: () => chooseMode('unified'),
+                },
+                t('diff.view.unified'),
+              ),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  'aria-pressed': mode === 'split',
+                  title: t('diff.view.split'),
+                  onClick: () => chooseMode('split'),
+                },
+                t('diff.view.split'),
+              ),
+            ),
       )
-      if (patch.binary === true || patch.hunks.length === 0) {
+      if (patch.binary === true || prepared.hunks.length === 0) {
         return React.createElement(
           'div',
-          { style: S.diff },
+          { className: 'gsy-diffbox' },
           head,
-          React.createElement('div', { style: S.diffNote }, t('diff.noText')),
+          React.createElement('div', { className: 'gsy-diffnote' }, t('diff.noText')),
         )
       }
+
       const body = []
-      patch.hunks.forEach((hunk, hunkIndex) => {
-        body.push(
-          React.createElement('div', { key: `h${hunkIndex}`, style: S.diffHunk }, hunk.header),
-        )
+      prepared.hunks.forEach((hunk, hunkIndex) => {
+        body.push(React.createElement('div', { key: `h${hunkIndex}`, className: 'gsy-hunk' }, hunk.header))
+        if (mode === 'split') {
+          splitHunkRows(hunk.rows).forEach((row, rowIndex) => {
+            const key = `h${hunkIndex}r${rowIndex}`
+            if (row.note !== undefined) {
+              body.push(
+                React.createElement(
+                  'div',
+                  { key, className: 'gsy-drow gsy-note' },
+                  React.createElement('span', { className: 'gsy-text' }, row.note.text),
+                ),
+              )
+              return
+            }
+            const half = (side) => {
+              const source = row[side]
+              if (source === undefined) {
+                return React.createElement('span', { className: 'gsy-half gsy-empty' })
+              }
+              // A context row is the same line on both sides: no sign, no tint.
+              // The tone follows the row's own kind, never the half it sits in —
+              // otherwise every left half would claim to be a deletion.
+              const kind = source.kind === 'del' ? 'gsy-del' : source.kind === 'add' ? 'gsy-add' : ''
+              const sign = source.kind === 'del' ? '-' : source.kind === 'add' ? '+' : ' '
+              return React.createElement(
+                'span',
+                { className: `gsy-half ${kind}`.trim() },
+                React.createElement(
+                  'span',
+                  { className: 'gsy-gutter' },
+                  side === 'left'
+                    ? source.oldNo === null
+                      ? ''
+                      : String(source.oldNo)
+                    : source.newNo === null
+                      ? ''
+                      : String(source.newNo),
+                ),
+                React.createElement('span', { className: 'gsy-sign' }, sign),
+                React.createElement(
+                  'span',
+                  { className: 'gsy-text' },
+                  inlineChildren(source, source.kind === 'del' ? 'gsy-inline-del' : 'gsy-inline-add'),
+                ),
+              )
+            }
+            body.push(
+              React.createElement(
+                'div',
+                { key, className: 'gsy-drow gsy-split' },
+                half('left'),
+                half('right'),
+              ),
+            )
+          })
+          return
+        }
         hunk.rows.forEach((row, rowIndex) => {
-          const background = row.kind === 'add' ? S.diffAdd : row.kind === 'del' ? S.diffDel : undefined
-          const signColor = row.kind === 'add' ? S.diffAddText : row.kind === 'del' ? S.diffDelText : undefined
+          const tone = row.kind === 'add' ? 'gsy-add' : row.kind === 'del' ? 'gsy-del' : row.kind === 'note' ? 'gsy-note' : ''
           body.push(
             React.createElement(
               'div',
-              { key: `h${hunkIndex}r${rowIndex}`, style: style(S.diffRow, background) },
-              React.createElement('span', { style: S.diffGutter }, row.oldNo === null ? '' : String(row.oldNo)),
-              React.createElement('span', { style: S.diffGutter }, row.newNo === null ? '' : String(row.newNo)),
-              React.createElement('span', { style: style(S.diffSign, signColor) }, row.sign),
-              React.createElement('span', { style: S.diffText }, row.text),
+              { key: `h${hunkIndex}r${rowIndex}`, className: `gsy-drow ${tone}`.trim() },
+              React.createElement('span', { className: 'gsy-gutter' }, row.oldNo === null ? '' : String(row.oldNo)),
+              React.createElement('span', { className: 'gsy-gutter' }, row.newNo === null ? '' : String(row.newNo)),
+              React.createElement('span', { className: 'gsy-sign' }, row.sign),
+              React.createElement(
+                'span',
+                { className: 'gsy-text' },
+                inlineChildren(row, row.kind === 'add' ? 'gsy-inline-add' : 'gsy-inline-del'),
+              ),
             ),
           )
         })
       })
       return React.createElement(
         'div',
-        { style: S.diff },
+        { className: 'gsy-diffbox' },
         head,
-        React.createElement('div', { style: S.diffBody }, ...body),
+        React.createElement('div', { className: fill === true ? 'gsy-diffbody gsy-fill' : 'gsy-diffbody' }, ...body),
       )
     }
 
@@ -1192,6 +1392,153 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The Host route a patch is read from, when the Host half registered one.
+     *
+     * A relative path resolved against the page's own base: a GUI under a
+     * reverse-proxy directory prefix then keeps that prefix, and the launch token
+     * in the page's query is dropped — the request is authenticated by the
+     * browser cookie the connection service issues, the same way every other
+     * plugin route is.
+     */
+    const DIFF_ROUTE = 'github-sync/diff'
+    const MESSAGE_ROUTE = 'github-sync/message'
+
+    /** What the route last said about itself: unknown, ready, or missing. */
+    let diffRouteState = 'unknown'
+
+    /** Patches already read, so a hover can pay for the click. */
+    const diffCache = new Map()
+    const DIFF_CACHE_MS = 8000
+    /** Reads in flight, so a row hovered twice asks once. */
+    const diffInflight = new Set()
+
+    /** The route's URL, or null on a page with no base to resolve against. */
+    function hostRouteUrl(route) {
+      if (typeof document === 'undefined' || typeof document.baseURI !== 'string' || document.baseURI.length === 0) {
+        return null
+      }
+      try {
+        const base = new URL(document.baseURI)
+        base.search = ''
+        base.hash = ''
+        if (!base.pathname.endsWith('/')) base.pathname += '/'
+        return new URL(route, base).href
+      } catch {
+        return null
+      }
+    }
+
+    const diffKey = (sessionId, path) => `${sessionId}\u0000${path}`
+
+    /** One fresh cached patch, or undefined when it is absent or stale. */
+    function cachedDiff(sessionId, path) {
+      const entry = diffCache.get(diffKey(sessionId, path))
+      if (entry === undefined) return undefined
+      if (Date.now() - entry.at > DIFF_CACHE_MS) {
+        diffCache.delete(diffKey(sessionId, path))
+        return undefined
+      }
+      return entry.text
+    }
+
+    /** Keep a patch for the next click on the same row. */
+    function rememberDiff(sessionId, path, text) {
+      diffCache.set(diffKey(sessionId, path), { at: Date.now(), text })
+      // A tree with hundreds of rows must not grow this without bound.
+      if (diffCache.size > 64) {
+        const oldest = [...diffCache.entries()].sort((left, right) => left[1].at - right[1].at)[0]
+        if (oldest !== undefined) diffCache.delete(oldest[0])
+      }
+    }
+
+    /**
+     * Ask the Host for one path's patch over its own route.
+     *
+     * Resolves to the text, or undefined when this deployment has no route (an
+     * older Host, or a composition without a web server) or the route answered an
+     * error — the caller then falls back to the command bridge, which is the one
+     * that can explain itself.
+     */
+    async function requestHostDiff({ sessionId, path, dir }) {
+      if (diffRouteState === 'missing' || sessionId === undefined || typeof fetch !== 'function') return undefined
+      const url = hostRouteUrl(DIFF_ROUTE)
+      if (url === null) return undefined
+      let response
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId, path, ...(dir === null || dir === undefined ? {} : { dir }) }),
+        })
+      } catch {
+        // A transport failure is not proof the route is missing (a reload, a
+        // proxy hiccup); the command bridge still answers, and the next paint
+        // tries again.
+        return undefined
+      }
+      if (response.status === 404 || response.status === 405) {
+        diffRouteState = 'missing'
+        return undefined
+      }
+      if (response.ok !== true) return undefined
+      const body = await response.json().catch(() => undefined)
+      if (body?.ok !== true || typeof body.text !== 'string') return undefined
+      diffRouteState = 'ready'
+      return body.text
+    }
+
+    /**
+     * Ask the Host for a suggested commit message over its own route.
+     *
+     * The same fence and the same fallback rule as the patch route: undefined when
+     * this deployment has no route, so the caller can use the command bridge.
+     * Resolves to `{ subject, body? }`.
+     */
+    async function requestHostMessage({ sessionId, dir, files }) {
+      if (diffRouteState === 'missing' || sessionId === undefined || typeof fetch !== 'function') return undefined
+      const url = hostRouteUrl(MESSAGE_ROUTE)
+      if (url === null) return undefined
+      let response
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            ...(dir === null || dir === undefined ? {} : { dir }),
+            ...(Array.isArray(files) && files.length > 0 ? { files } : {}),
+          }),
+        })
+      } catch {
+        return undefined
+      }
+      if (response.status === 404 || response.status === 405) {
+        diffRouteState = 'missing'
+        return undefined
+      }
+      if (response.ok !== true) return undefined
+      const body = await response.json().catch(() => undefined)
+      if (body?.ok !== true || typeof body.message?.subject !== 'string') return undefined
+      diffRouteState = 'ready'
+      return body.message
+    }
+
+    /** Read one row's patch before it is clicked; a hover is free to fail. */
+    async function prefetchDiff(sessionId, path) {
+      if (sessionId === undefined || diffRouteState === 'missing') return
+      if (cachedDiff(sessionId, path) !== undefined) return
+      const key = diffKey(sessionId, path)
+      if (diffInflight.has(key)) return
+      diffInflight.add(key)
+      try {
+        const text = await requestHostDiff({ sessionId, path, dir: targetChoice.get(sessionId) ?? null })
+        if (text !== undefined) rememberDiff(sessionId, path, text)
+      } finally {
+        diffInflight.delete(key)
+      }
+    }
+
+    /**
      * One file's patch, as a sidebar tab.
      *
      * The tab owns its own request: the menu records the address it wants opened,
@@ -1218,20 +1565,40 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (path === null || sessionId === undefined || asked === true) return undefined
-        const commands = commandsOf(remoteRef.current)
-        if (commands?.execute === undefined) {
-          setFailed(true)
-          setOutput(t('error.unavailable'))
-          return undefined
-        }
-        // The path travels as `--dir`-free text on the command line, so it is
-        // quoted: a path with a space is otherwise two arguments.
-        const line = `/github diff --file "${path}"`
-        let cancelled = false
-        // Marked before the await, so a re-render during the await does not issue
-        // the same command a second time.
+        // Marked before the first await, so a re-render during it does not ask
+        // for the same patch twice.
         setAsked(true)
+        let cancelled = false
         const show = async () => {
+          // A hovered row has already paid for its patch.
+          const warm = cachedDiff(sessionId, path)
+          if (warm !== undefined) {
+            setFailed(false)
+            setOutput(warm)
+            return
+          }
+          // The Host route is the fast path: no session command, no command row,
+          // and no wait for the session's turn — a click is a read, not an
+          // operation. A deployment without the route falls through to the
+          // command bridge, which is the same request a person could type.
+          const direct = await requestHostDiff({ sessionId, path, dir: targetChoice.get(sessionId) ?? null })
+          if (cancelled) return
+          if (direct !== undefined) {
+            rememberDiff(sessionId, path, direct)
+            setFailed(false)
+            setOutput(direct)
+            return
+          }
+          const commands = commandsOf(remoteRef.current)
+          if (commands?.execute === undefined) {
+            setFailed(true)
+            setOutput(t('error.unavailable'))
+            return
+          }
+          // The path travels as `--dir`-free text on the command line, so it is
+          // quoted: a path with a space is otherwise two arguments.
+          const choice = targetChoice.get(sessionId) ?? null
+          const line = `/github diff --file "${path}"${choice === null ? '' : ` --dir "${choice}"`}`
           try {
             const response = await commands.execute(sessionId, line, [])
             if (cancelled) return
@@ -1246,6 +1613,7 @@ window.__ModuleLoader__.load({
               setOutput(t('error.probeUnexpected'))
               return
             }
+            rememberDiff(sessionId, path, text)
             setFailed(false)
             setOutput(text)
           } catch (error) {
@@ -1290,7 +1658,13 @@ window.__ModuleLoader__.load({
           React.createElement('pre', { style: style(S.output, failed ? S.outputError : undefined) }, output),
         )
       }
-      return React.createElement('div', { style: S.pane, 'data-github-sync': '' }, React.createElement(DiffView, { patch, t }))
+      // The tab's own column scrolls, so the patch is allowed to take the height
+      // it needs instead of scrolling inside a box inside a scroller.
+      return React.createElement(
+        'div',
+        { style: S.pane, 'data-github-sync': '' },
+        React.createElement(DiffView, { patch, t, fill: true }),
+      )
     }
 
     /** The branch glyph, drawn from the current label colour. */
@@ -1354,6 +1728,411 @@ window.__ModuleLoader__.load({
       if (staged !== undefined) parts.push(t('change.staged', { what: staged }))
       if (worktree !== undefined) parts.push(worktree)
       return parts.length === 0 ? t('change.modified') : parts.join(' · ')
+    }
+
+    /**
+     * The change list's and the patch's own stylesheet.
+     *
+     * Inline styles carry the panel's ordinary chrome, but a tree needs states
+     * inline styles cannot express: hover, focus-visible, a rotated disclosure,
+     * an indeterminate checkbox. One scoped sheet is cheaper than a hover flag
+     * per row and keeps the two surfaces — popup and pane — identical, because
+     * they render the same class names. Every colour is a DSH alias token, so
+     * the list follows the active theme and skin.
+     */
+    const STYLE_ID = 'dsh-github-sync-styles'
+    const STYLES = `
+.gsy-tree { display: flex; flex-direction: column; margin: 2px 0 4px; }
+.gsy-row { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 4px; border-radius: 5px; box-sizing: border-box; }
+.gsy-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.gsy-guides { flex: 0 0 auto; align-self: stretch; background-image: repeating-linear-gradient(to right, transparent 0 17px, var(--dsw-alias-border-l1) 17px 18px); }
+.gsy-check { flex: 0 0 auto; width: 13px; height: 13px; margin: 0; accent-color: var(--dsw-alias-brand-primary); cursor: pointer; }
+.gsy-check:disabled { cursor: default; opacity: 0.5; }
+.gsy-main { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.gsy-main:focus-visible, .gsy-hint:focus-visible { outline: 2px solid var(--dsw-alias-interactive-bg-hover-accent); outline-offset: -1px; border-radius: 4px; }
+.gsy-chevron { flex: 0 0 auto; width: 12px; height: 12px; color: var(--dsw-alias-label-tertiary); transition: transform 120ms ease; }
+.gsy-chevron[data-open='true'] { transform: rotate(90deg); }
+.gsy-folder { flex: 0 0 auto; width: 13px; height: 13px; color: var(--dsw-alias-label-tertiary); }
+.gsy-dirname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.gsy-count { flex: 0 0 auto; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
+.gsy-badge { flex: 0 0 auto; width: 14px; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 16px; font-weight: 700; }
+.gsy-name { flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dsw-alias-label-primary); }
+.gsy-from { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--dsw-alias-label-tertiary); }
+.gsy-hint { flex: 0 0 auto; padding: 0 5px; border: 0; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.gsy-row:hover .gsy-hint, .gsy-row:focus-within .gsy-hint { opacity: 1; }
+.gsy-hint:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+@media (hover: none) { .gsy-hint { opacity: 1; } }
+.gsy-head-actions { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.gsy-iconbtn { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 27px; padding: 0 7px; box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; text-decoration: none; }
+.gsy-iconbtn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.gsy-iconbtn:disabled { opacity: 0.4; cursor: default; background: transparent; }
+.gsy-iconbtn svg { width: 14px; height: 14px; }
+.gsy-iconbtn:focus-visible, .gsy-ai:focus-visible { outline: 2px solid var(--dsw-alias-interactive-bg-hover-accent); outline-offset: -1px; }
+.gsy-commit-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 8px 4px; }
+.gsy-ai { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; padding: 0; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 8px; background: transparent; color: var(--dsw-alias-brand-primary); cursor: pointer; }
+.gsy-ai:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.gsy-ai:disabled { opacity: 0.45; cursor: default; background: transparent; }
+.gsy-check-row { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; cursor: pointer; }
+.gsy-check-row .gsy-check { width: 13px; height: 13px; }
+.gsy-diffbox { display: flex; flex-direction: column; margin: 4px 0 0; border: 0.5px solid var(--dsw-alias-border-l1); border-radius: 8px; overflow: hidden; background: var(--dsw-alias-bg-base); }
+.gsy-diffhead { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--dsw-alias-bg-layer-2); border-bottom: 0.5px solid var(--dsw-alias-border-l1); font-size: 11px; line-height: 16px; }
+.gsy-diffpath { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.gsy-diffstat { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.gsy-stat-add { color: var(--dsw-alias-state-success-primary); }
+.gsy-stat-del { color: var(--dsw-alias-state-error-primary); }
+.gsy-seg { display: inline-flex; flex: 0 0 auto; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 5px; overflow: hidden; }
+.gsy-seg button { border: 0; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; padding: 0 6px; cursor: pointer; }
+.gsy-seg button[aria-pressed='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.gsy-diffbody { overflow: auto; padding: 2px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 16px; max-height: min(46vh, 420px); }
+.gsy-diffbody.gsy-fill { max-height: none; }
+.gsy-drow { display: flex; align-items: flex-start; min-height: 16px; }
+.gsy-split .gsy-gutter { width: 2.4em; padding-right: 4px; font-size: 9px; }
+.gsy-split .gsy-text { padding-right: 6px; }
+.gsy-gutter { flex: 0 0 auto; width: 3em; padding-right: 6px; text-align: right; color: var(--dsw-alias-label-tertiary); font-size: 10px; line-height: 16px; user-select: none; font-variant-numeric: tabular-nums; }
+.gsy-sign { flex: 0 0 auto; width: 1em; text-align: center; user-select: none; line-height: 16px; }
+.gsy-text { flex: 1 1 auto; min-width: 0; padding-right: 8px; white-space: pre-wrap; word-break: break-word; }
+.gsy-add { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent); }
+.gsy-del { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); }
+.gsy-add .gsy-text, .gsy-add .gsy-sign { color: var(--dsw-alias-state-success-primary); }
+.gsy-del .gsy-text, .gsy-del .gsy-sign { color: var(--dsw-alias-state-error-primary); }
+.gsy-note .gsy-text { color: var(--dsw-alias-label-tertiary); font-style: italic; }
+.gsy-hunk { padding: 2px 8px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-1); white-space: pre-wrap; word-break: break-all; }
+.gsy-diffnote { padding: 6px 8px; color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px; }
+.gsy-inline-add { background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 26%, transparent); border-radius: 3px; }
+.gsy-inline-del { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 26%, transparent); border-radius: 3px; }
+.gsy-split { display: flex; width: 100%; }
+.gsy-half { flex: 1 1 50%; min-width: 0; display: flex; }
+.gsy-half + .gsy-half { border-left: 0.5px solid var(--dsw-alias-border-l1); }
+.gsy-half.gsy-empty { background: var(--dsw-alias-bg-layer-1); opacity: 0.5; }
+`
+
+    /** Install the sheet once; a second panel must not duplicate it. */
+    function ensureStyles() {
+      if (typeof document === 'undefined' || document === null || document.head === undefined) return
+      if (document.getElementById(STYLE_ID) !== null) return
+      const element = document.createElement('style')
+      element.id = STYLE_ID
+      element.textContent = STYLES
+      document.head.appendChild(element)
+    }
+
+    /** Two-letter codes that mean a conflict is waiting to be resolved. */
+    const CONFLICT_CODES = ['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']
+
+    /** The letter a status code shows, and the tone its badge takes. */
+    const STATUS_TONE = {
+      M: 'modified',
+      T: 'modified',
+      A: 'added',
+      D: 'deleted',
+      R: 'renamed',
+      C: 'copied',
+      U: 'conflict',
+    }
+
+    /** Each tone's colour, drawn from the shared alias tokens. */
+    const TONE_COLOR = {
+      modified: 'var(--dsw-alias-state-warn-primary)',
+      added: 'var(--dsw-alias-state-success-primary)',
+      untracked: 'var(--dsw-alias-state-success-primary)',
+      deleted: 'var(--dsw-alias-state-error-primary)',
+      conflict: 'var(--dsw-alias-state-error-primary)',
+      renamed: 'var(--dsw-alias-state-business-primary)',
+      copied: 'var(--dsw-alias-state-business-primary)',
+    }
+
+    /**
+     * What git's two letters mean for one row: a badge and a tone.
+     *
+     * `??` is untracked, and reads as an addition — it is a file the next commit
+     * would add. A conflict is its own tone because "M" would understate it. A
+     * clean pair (`  `) and an ignored one (`!!`) are not rows at all.
+     *
+     * @param code - the probe's two-letter code.
+     * @returns `{ letter, tone, staged, untracked, conflicted }`, or null.
+     */
+    function statusOfCode(code) {
+      const xy = typeof code === 'string' ? code : ''
+      if (xy.length < 2) return { letter: 'M', tone: 'modified', staged: false, untracked: false, conflicted: false }
+      if (xy === '??') return { letter: 'U', tone: 'untracked', staged: false, untracked: true, conflicted: false }
+      if (xy === '!!' || xy === '  ') return null
+      const conflicted = CONFLICT_CODES.includes(xy)
+      const letter = [xy[0], xy[1]].find((value) => value !== ' ' && value !== '?') ?? 'M'
+      return {
+        letter,
+        tone: conflicted ? 'conflict' : (STATUS_TONE[letter] ?? 'modified'),
+        staged: xy[0] !== ' ' && xy[0] !== '?',
+        untracked: false,
+        conflicted,
+      }
+    }
+
+    /** A path split into its segments, Windows separators normalized. */
+    function changeSegments(path) {
+      return String(path ?? '')
+        .replace(/\\/g, '/')
+        .split('/')
+        .filter((segment) => segment !== '' && segment !== '.')
+    }
+
+    /**
+     * Compare two names with a pinned collation, then by code point.
+     *
+     * `localeCompare(other)` alone follows the runtime's locale, so the same
+     * list could order differently on two machines. Pinning `'en'` with base
+     * sensitivity makes case and accent variants compare equal, and the code
+     * point tiebreak then gives a total order that does not move between runs.
+     */
+    function compareChangeNames(left, right) {
+      const collated = left.localeCompare(right, 'en', { sensitivity: 'base' })
+      if (collated !== 0) return collated
+      return left === right ? 0 : left < right ? -1 : 1
+    }
+
+    /** The number of changed files under a finished child list. */
+    function countTreeFiles(nodes) {
+      let count = 0
+      for (const node of nodes) count += node.kind === 'dir' ? node.count : 1
+      return count
+    }
+
+    /** Finish a draft's children: directories first, then its own files. */
+    function finishChangeChildren(draft) {
+      const nodes = []
+      for (const child of draft.dirs.values()) nodes.push(finishChangeDir(child))
+      nodes.push(...draft.files)
+      nodes.sort((left, right) =>
+        left.kind !== right.kind ? (left.kind === 'dir' ? -1 : 1) : compareChangeNames(left.name, right.name),
+      )
+      return nodes
+    }
+
+    /** Materialize one draft directory, compressing its single-child chain. */
+    function finishChangeDir(draft) {
+      let name = draft.name
+      let current = draft
+      // A directory with no file of its own and exactly one subdirectory is not
+      // worth a row of its own: the chain reads as one label, `a/b/c`. The
+      // compression stops where the path branches or a file sits at this level,
+      // so a row always stands for a place where something actually changed.
+      while (current.files.length === 0 && current.dirs.size === 1) {
+        const only = [...current.dirs.values()][0]
+        name = `${name}/${only.name}`
+        current = only
+      }
+      const children = finishChangeChildren(current)
+      return { kind: 'dir', name, path: current.path, children, count: countTreeFiles(children) }
+    }
+
+    /**
+     * Fold a flat change list into the directory tree the panel draws.
+     *
+     * @param entries - `{ path, code, from? }` rows from the probe.
+     * @returns the tree's roots, in render order.
+     */
+    function buildChangeTree(entries) {
+      const root = { dirs: new Map(), files: [] }
+      const seen = new Set()
+      for (const entry of entries ?? []) {
+        const status = statusOfCode(entry?.code)
+        if (status === null || typeof entry?.path !== 'string') continue
+        const segments = changeSegments(entry.path)
+        if (segments.length === 0) continue
+        const key = segments.join('/')
+        if (seen.has(key)) continue
+        seen.add(key)
+        let at = root
+        let prefix = ''
+        for (let index = 0; index < segments.length - 1; index += 1) {
+          prefix = prefix === '' ? segments[index] : `${prefix}/${segments[index]}`
+          let next = at.dirs.get(segments[index])
+          if (next === undefined) {
+            next = { name: segments[index], path: prefix, dirs: new Map(), files: [] }
+            at.dirs.set(segments[index], next)
+          }
+          at = next
+        }
+        at.files.push({
+          kind: 'file',
+          name: segments[segments.length - 1],
+          // git's own spelling is kept for the path — every command that acts on
+          // the row quotes this string — while only the tree rows split it.
+          path: entry.path,
+          code: entry.code,
+          status,
+          ...(typeof entry.from === 'string' && entry.from.length > 0 ? { from: entry.from } : {}),
+        })
+      }
+      return finishChangeChildren(root)
+    }
+
+    /** The file paths under one node, depth first. */
+    function treeFilePaths(node) {
+      if (node.kind === 'file') return [node.path]
+      const paths = []
+      const walk = (nodes) => {
+        for (const child of nodes) {
+          if (child.kind === 'file') paths.push(child.path)
+          else walk(child.children)
+        }
+      }
+      walk(node.children)
+      return paths
+    }
+
+    /** The rows to draw: a collapsed directory hides its subtree. */
+    function flattenChangeTree(nodes, collapsed, depth = 0, out = []) {
+      for (const node of nodes) {
+        out.push({ node, depth })
+        if (node.kind === 'dir' && collapsed.has(node.path) !== true) {
+          flattenChangeTree(node.children, collapsed, depth + 1, out)
+        }
+      }
+      return out
+    }
+
+    /** The disclosure chevron. */
+    function ChevronIcon() {
+      return React.createElement(
+        'svg',
+        { className: 'gsy-chevron', viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+        React.createElement('path', { d: 'M6 3.5 10.5 8 6 12.5' }),
+      )
+    }
+
+    /** The folder row's artwork. */
+    function FolderIcon() {
+      return React.createElement(
+        'svg',
+        { className: 'gsy-folder', viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round', 'aria-hidden': true },
+        React.createElement('path', { d: 'M1.8 4.2h4l1.4 1.4h6.9v6.2H1.8z' }),
+      )
+    }
+
+    /**
+     * The workspace's changes, folded into a tree.
+     *
+     * The list keeps the contract the old flat list had — a ticked path is one
+     * the next commit records — and adds the shape a big change has: a refactor
+     * touching `src/client/changes/*` reads as one directory row instead of a
+     * wall of near-identical paths. Clicking a file opens its patch; clicking a
+     * directory's tick narrows the commit to that subtree.
+     */
+    function ChangesTree(props) {
+      ensureStyles()
+      const t = props.t
+      const disabled = props.disabled === true
+      const excluded = props.excluded ?? new Set()
+      const collapsed = props.collapsed ?? new Set()
+      const rows = flattenChangeTree(buildChangeTree(props.entries ?? []), collapsed)
+
+      const openDiff = (path) => {
+        if (disabled) return
+        props.onOpenDiff?.(path)
+      }
+
+      const rowChildren = []
+
+      for (const { node, depth } of rows) {
+        const indent = { paddingLeft: 4 }
+        // One guide per ancestor level, so a deep file still shows where it sits
+        // even when the directory rows above it have scrolled out of view.
+        const guides =
+          depth === 0
+            ? null
+            : React.createElement('span', { className: 'gsy-guides', style: { width: depth * 18 } })
+        if (node.kind === 'dir') {
+          const open = collapsed.has(node.path) !== true
+          const paths = treeFilePaths(node)
+          const included = paths.filter((path) => !excluded.has(path)).length
+          const all = paths.length > 0 && included === paths.length
+          rowChildren.push(
+            React.createElement(
+              'div',
+              { key: `dir-${node.path}`, className: 'gsy-row', style: indent },
+              guides,
+              React.createElement('input', {
+                type: 'checkbox',
+                className: 'gsy-check',
+                checked: all,
+                disabled,
+                'aria-label': t('changes.includeDir', { path: node.path }),
+                ref: (element) => {
+                  if (element !== null) element.indeterminate = included > 0 && !all
+                },
+                onChange: () => props.onTogglePaths?.(paths, !all),
+              }),
+              React.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'gsy-main',
+                  'aria-expanded': open,
+                  title: open ? t('changes.collapse', { path: node.path }) : t('changes.expand', { path: node.path }),
+                  onClick: () => props.onToggleDir?.(node.path),
+                },
+                React.createElement('span', { 'data-open': open ? 'true' : 'false' }, React.createElement(ChevronIcon)),
+                React.createElement(FolderIcon),
+                React.createElement('span', { className: 'gsy-dirname' }, node.name),
+                React.createElement('span', { className: 'gsy-count' }, String(node.count)),
+              ),
+            ),
+          )
+          continue
+        }
+
+        const status = node.status
+        const selectable = !node.path.includes('"')
+        const included = !excluded.has(node.path)
+        rowChildren.push(
+          React.createElement(
+            'div',
+            {
+              key: `file-${node.path}`,
+              className: 'gsy-row',
+              style: indent,
+              // A hover is the moment the click is decided; reading the patch
+              // here is what makes the click itself instant.
+              onMouseEnter: () => props.onPrefetchDiff?.(node.path),
+            },
+            guides,
+            React.createElement('input', {
+              type: 'checkbox',
+              className: 'gsy-check',
+              checked: included,
+              disabled: disabled || !selectable,
+              title: selectable ? undefined : t('changes.unrepresentable'),
+              'aria-label': t('changes.include', { path: node.path }),
+              onChange: () => props.onTogglePath?.(node.path),
+            }),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'gsy-main',
+                title: `${node.path} — ${changeWords(node.code, t)}`,
+                onClick: () => openDiff(node.path),
+              },
+              React.createElement('span', { className: 'gsy-badge', style: { color: TONE_COLOR[status.tone] } }, status.letter),
+              React.createElement('span', { className: 'gsy-name' }, node.name),
+              node.from === undefined ? null : React.createElement('span', { className: 'gsy-from' }, `← ${node.from}`),
+            ),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'gsy-hint',
+                disabled,
+                title: t('changes.diffLabel', { path: node.path }),
+                onClick: () => openDiff(node.path),
+              },
+              t('changes.diff'),
+            ),
+          ),
+        )
+      }
+
+      return React.createElement('div', { className: 'gsy-tree' }, ...rowChildren)
     }
 
     /**
@@ -1437,6 +2216,10 @@ window.__ModuleLoader__.load({
       // count, and when it last checked; keeping a duplicate line above the
       // composer is the clutter this seat exists to remove.
       if (/^\s*status\b/.test(args)) return null
+      // The message suggestion is the button's read, not a transcript event: the
+      // answer lands in the message box, and a row above the composer would only
+      // repeat it as JSON.
+      if (/^\s*message\b/.test(args)) return null
       const outcome = command?.outcome
       // Everything else stays one line tall. The full answer is still available
       // on hover and in the session log, and UI actions repeat it in the pane's
@@ -1498,19 +2281,19 @@ window.__ModuleLoader__.load({
       // than the selection so "everything" stays the default and survives a
       // probe refresh that adds files.
       const [excluded, setExcluded] = React.useState(() => new Set())
+      // Which directory rows are folded shut. Kept apart from the probe so a
+      // refresh — the file list being re-read while it is browsed — never
+      // reopens a subtree the reader closed on purpose.
+      const [collapsedDirs, setCollapsedDirs] = React.useState(() => new Set())
       const [branchName, setBranchName] = React.useState('')
-      // The message the next commit records, and the markers a pipeline looks for.
-      // The default is the generated message with no markers, so the ordinary
-      // commit stays one click.
-      const [writeOwnMessage, setWriteOwnMessage] = React.useState(false)
-      const [customMessage, setCustomMessage] = React.useState('')
+      // Whether the branch row is asking for a new name rather than listing.
+      const [branchCreating, setBranchCreating] = React.useState(false)
+      // The message the next commit records. It is typed or generated; the commit
+      // controls appear only once there is something to say.
+      const [message, setMessage] = React.useState('')
+      const [generating, setGenerating] = React.useState(false)
       const [presetMarkers, setPresetMarkers] = React.useState(() => new Set())
       const [otherMarkers, setOtherMarkers] = React.useState('')
-      // Which commit-shaped action is waiting for its message to be confirmed.
-      // The message and the markers belong to *that* decision, so they appear when
-      // the decision is being made: a panel that always shows a form for something
-      // nobody has asked for reads as if it were already doing it.
-      const [pendingAction, setPendingAction] = React.useState(null)
 
       // A ref mirrors the latest Remote namespace so the probe effect below can
       // depend on the session and the open state alone, without re-firing when
@@ -1548,6 +2331,9 @@ window.__ModuleLoader__.load({
           return { text: undefined, failure: t('error.unavailable') }
         }
         let failureText = null
+        // A command may change the tree, so a patch read before it is no longer
+        // what the row would show. A probe is a read, and keeps them.
+        if (options?.probe !== true) diffCache.clear()
         // A background probe is one nobody asked for: it must not blank the state
         // line for the length of a `git status`, and it re-renders through the
         // probe revision instead of through `busy`.
@@ -1936,14 +2722,13 @@ window.__ModuleLoader__.load({
         if (surface === 'pane' || open) return
         setOutput(null)
         setFailed(false)
-        // A step nobody confirmed does not survive the menu: reopening starts from
-        // the same place as the first open.
-        setPendingAction(null)
       }, [open, surface])
 
       // The diff the menu handed over, if this pane was opened for one. The
-      // request is cleared before the command runs, so a re-render — or the pane
-      // being remounted — cannot issue the same diff twice.
+      // request is cleared before the patch is read, so a re-render — or the pane
+      // being remounted — cannot issue the same diff twice. The Host route is
+      // asked first: a click is a read, and only a deployment without the route
+      // waits for the command bridge.
       React.useEffect(() => {
         if (surface !== 'pane' || sessionId === undefined) return undefined
         const path = pendingDiff.get(sessionId)
@@ -1952,12 +2737,19 @@ window.__ModuleLoader__.load({
         let cancelled = false
         const show = async () => {
           try {
+            const text = await loadDiff(path)
+            if (cancelled) return
+            if (text !== undefined) {
+              setFailed(false)
+              setOutput(text)
+              return
+            }
             await run(`/github diff --file "${path}"${dirSuffix(sessionId)}`)
           } catch (error) {
+            if (cancelled) return
             setFailed(true)
             setOutput(error instanceof Error ? error.message : String(error))
           }
-          if (cancelled) return
         }
         void show()
         return () => {
@@ -1977,10 +2769,10 @@ window.__ModuleLoader__.load({
         if (!open) return undefined
         const onKey = (event) => {
           if (event.key !== 'Escape') return
-          // Escape backs out of the commit step before it closes the menu: the
-          // menu was opened for a reason, and the step is what was just entered.
-          if (pendingAction !== null) {
-            setPendingAction(null)
+          // Escape backs out of the new-branch field before it closes the menu.
+          if (branchCreating) {
+            setBranchCreating(false)
+            setBranchName('')
             return
           }
           setOpen(false)
@@ -2012,7 +2804,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('mousedown', onPointerDown, true)
           document.removeEventListener('focusin', onFocusIn)
         }
-      }, [open, pendingAction])
+      }, [open, branchCreating])
 
       // Only a user action disables the menu. The background check never does,
       // so its outcome cannot take the controls away.
@@ -2140,16 +2932,90 @@ window.__ModuleLoader__.load({
         })
       }
 
-      // What the next commit records besides the paths: a written message when
-      // one is asked for, and the CI markers. A double quote becomes a single one
-      // because the message travels on the `/github` line, which is parsed by
-      // quoting; the menu says so rather than silently dropping the character.
+      /** Tick or untick every path under one directory row. */
+      const togglePaths = (paths, include) => {
+        setExcluded((current) => {
+          const next = new Set(current)
+          for (const path of paths) {
+            if (include) next.delete(path)
+            else next.add(path)
+          }
+          return next
+        })
+      }
+
+      /** Fold or unfold one directory row. */
+      const toggleDir = (path) => {
+        setCollapsedDirs((current) => {
+          const next = new Set(current)
+          if (next.has(path)) next.delete(path)
+          else next.add(path)
+          return next
+        })
+      }
+
+      /**
+       * One path's patch, read the fast way when the Host offers it.
+       *
+       * @returns the patch text, or undefined when the route is unavailable and
+       *   the caller should fall back to the command bridge.
+       */
+      const loadDiff = async (path) => {
+        const warm = cachedDiff(sessionId, path)
+        if (warm !== undefined) return warm
+        const direct = await requestHostDiff({
+          sessionId,
+          path,
+          dir: targetChoice.get(sessionId) ?? null,
+        })
+        if (direct !== undefined) rememberDiff(sessionId, path, direct)
+        return direct
+      }
+
+      /**
+       * Show one path's patch, at the highest capability the deployment has.
+       *
+       * A patch is a document: it is compared against another patch, kept open
+       * while the change list is read, and closed when it is done with. So it
+       * gets a tab of its own, and the change list stays where it was. Without
+       * the dock's tab registry the patch renders in the panel — over the Host
+       * route when there is one, so a click never waits for a session command —
+       * and a deployment with neither still has the command bridge.
+       */
+      const openDiffFor = (path) => {
+        if (openDiffTab !== null && sessionId !== undefined) {
+          openDiffTab(sessionId, path)
+          return
+        }
+        if (openSidebar !== null) {
+          // The pane may not have been up yet; hand it the path and let its own
+          // effect read the patch, so the click is one request either way.
+          pendingDiff.set(sessionId, path)
+          openSidebar()
+          return
+        }
+        void loadDiff(path).then((text) => {
+          if (text !== undefined) {
+            setFailed(false)
+            setOutput(text)
+            return
+          }
+          void run(`/github diff --file "${path}"${dirSuffix(sessionId)}`).then(() => refresh())
+        })
+      }
+
+      // What the next commit records besides the paths: the message written in
+      // the box, and the CI markers. A double quote becomes a single one because
+      // the message travels on the `/github` line, which is parsed by quoting; a
+      // generated subject is one line, because the box is one line.
       const markers = [...presetMarkers, ...otherMarkers.split(',')]
         .map((marker) => marker.trim())
         .filter((marker) => marker.length > 0)
-      const messageText = customMessage.replace(/"/g, "'").trim()
-      const needCustom = writeOwnMessage && messageText.length === 0
-      const commitSuffix = `${writeOwnMessage && !needCustom ? ` --message "${messageText}"` : ''}${markers
+      const messageText = message.replace(/"/g, "'").trim()
+      // The command line is one line: a body's newlines travel as `\n` and are
+      // restored by the parser, so a generated paragraph reaches git intact.
+      const messageArgument = messageText.replace(/\n/g, '\\n')
+      const commitSuffix = `${messageText.length === 0 ? '' : ` --message "${messageArgument}"`}${markers
         .map((marker) => ` --marker "${marker}"`)
         .join('')}`
 
@@ -2166,14 +3032,63 @@ window.__ModuleLoader__.load({
             )
           : null
 
+      /** The markers a chip row and a free-text field together name. */
+      const markerListOf = (presets, others) =>
+        [...presets, ...String(others ?? '').split(',')]
+          .map((marker) => marker.trim())
+          .filter((marker) => marker.length > 0)
+
+      /** How a marker list reads on the subject line: `[skip ci] [release]`. */
+      const markerText = (list) => list.map((marker) => `[${marker}]`).join(' ')
+
+      /**
+       * The message with `list` appended after its title line.
+       *
+       * The markers live where they are recorded — after the subject, before the
+       * body — so the box shows exactly the message the commit will carry. A
+       * message with a body keeps that body below, untouched.
+       */
+      const withMarkers = (text, list) => {
+        const suffix = markerText(list)
+        if (suffix.length === 0) return text
+        const breakAt = text.indexOf('\n')
+        const title = breakAt === -1 ? text : text.slice(0, breakAt)
+        const rest = breakAt === -1 ? '' : text.slice(breakAt)
+        return `${title.replace(/\s+$/, '')} ${suffix}${rest}`
+      }
+
+      /** The same message with an earlier marker suffix taken back off. */
+      const withoutMarkers = (text, list) => {
+        const suffix = markerText(list)
+        if (suffix.length === 0) return text
+        const breakAt = text.indexOf('\n')
+        const title = breakAt === -1 ? text : text.slice(0, breakAt)
+        const rest = breakAt === -1 ? '' : text.slice(breakAt)
+        const tail = ` ${suffix}`
+        return title.endsWith(tail) ? `${title.slice(0, -tail.length)}${rest}` : text
+      }
+
+      /**
+       * Swap the markers a message carries for the newly chosen set.
+       *
+       * Ticking a chip edits the message itself, so what the box shows is what the
+       * commit records — there is no second, invisible list to reconcile at the
+       * click. The custom field is the same rule, applied on every keystroke.
+       */
+      const changeMarkers = (nextPresets, nextOthers) => {
+        const previous = markerListOf(presetMarkers, otherMarkers)
+        const next = markerListOf(nextPresets, nextOthers)
+        setPresetMarkers(nextPresets)
+        setOtherMarkers(nextOthers)
+        setMessage((current) => withMarkers(withoutMarkers(current, previous), next))
+      }
+
       /** Tick or untick one preset marker. */
       const toggleMarker = (marker) => {
-        setPresetMarkers((current) => {
-          const next = new Set(current)
-          if (next.has(marker)) next.delete(marker)
-          else next.add(marker)
-          return next
-        })
+        const next = new Set(presetMarkers)
+        if (next.has(marker)) next.delete(marker)
+        else next.add(marker)
+        changeMarkers(next, otherMarkers)
       }
 
       const markerChips = (presets) =>
@@ -2197,69 +3112,121 @@ window.__ModuleLoader__.load({
           )
         })
 
-      const commitOptions = [
-        React.createElement('div', { key: 'commit-label', style: S.hint }, t('commit.options')),
+      /**
+       * Ask the Host for a message and put it in the box.
+       *
+       * The Host route is tried first: it answers from the same engine without a
+       * session command, so the click is not serialized with the conversation's
+       * work and leaves no row behind. A deployment without the route falls back
+       * to `/github message`, which answers the same `{ subject, body? }`.
+       */
+      const generateMessage = async () => {
+        if (disabled || generating) return
+        setGenerating(true)
+        try {
+          const dir = targetChoice.get(sessionId) ?? null
+          const files = selected.map((entry) => entry[0])
+          let suggestion = await requestHostMessage({ sessionId, dir, files })
+          if (suggestion === undefined) {
+            const result = await run(`/github message${dirSuffix(sessionId)}${fileSuffix}`, { quiet: true })
+            const answer = typeof result?.text === 'string' ? result.text.trim() : ''
+            try {
+              suggestion = answer.length === 0 ? undefined : JSON.parse(answer)
+            } catch {
+              suggestion = undefined
+            }
+            if (suggestion === undefined) {
+              setFailed(true)
+              setOutput(result?.failure ?? t('commit.aiEmpty'))
+              return
+            }
+          }
+          const subject = typeof suggestion?.subject === 'string' ? suggestion.subject.trim() : ''
+          if (subject.length === 0) {
+            setFailed(true)
+            setOutput(t('commit.aiEmpty'))
+            return
+          }
+          const body = typeof suggestion?.body === 'string' ? suggestion.body.trim() : ''
+          const filled = body.length === 0 ? subject : `${subject}\n\n${body}`
+          // Whatever is ticked stays on the title of the new message.
+          setMessage(withMarkers(filled, markerListOf(presetMarkers, otherMarkers)))
+          setFailed(false)
+        } finally {
+          setGenerating(false)
+        }
+      }
+
+      const aiButton = React.createElement(
+        'button',
+        {
+          key: 'commit-ai',
+          type: 'button',
+          className: 'gsy-ai',
+          disabled: disabled || generating,
+          title: generating ? t('commit.aiBusy') : t('commit.ai'),
+          'aria-label': generating ? t('commit.aiBusy') : t('commit.ai'),
+          onClick: () => void generateMessage(),
+        },
+        React.createElement(
+          'svg',
+          { viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          React.createElement('path', { d: 'M8 1.6l1.5 4.2 4.2 1.5-4.2 1.5L8 13l-1.5-4.2L2.3 7.3l4.2-1.5z' }),
+          React.createElement('path', { d: 'M13 11.2l.6 1.7 1.7.6-1.7.6-.6 1.7-.6-1.7-1.7-.6 1.7-.6z' }),
+        ),
+      )
+
+      // The message box appears only where a commit can be made, and the commit
+      // controls appear only once it holds something to say.
+      const commitBox = [
         React.createElement(
           'div',
-          { key: 'commit-mode', style: S.chips },
-          React.createElement(
-            'button',
-            {
-              type: 'button',
-              role: 'menuitemradio',
-              'aria-checked': writeOwnMessage !== true,
-              disabled,
-              style: style(S.chip, writeOwnMessage !== true ? S.chipOn : undefined),
-              onClick: () => setWriteOwnMessage(false),
+          { key: 'commit-box', style: S.commitField },
+          React.createElement('textarea', {
+            key: 'commit-message',
+            style: S.commitInput,
+            value: message,
+            rows: 2,
+            spellCheck: false,
+            placeholder: t('commit.placeholder'),
+            'aria-label': t('commit.placeholder'),
+            disabled,
+            onChange: (event) => {
+              const value = event.target.value
+              setMessage(value)
+              // No message, no markers: the chips describe a title that is not
+              // there, so they go away with it.
+              if (value.trim().length === 0) {
+                setPresetMarkers(new Set())
+                setOtherMarkers('')
+              }
             },
-            t('commit.mode.ai'),
-          ),
-          React.createElement(
-            'button',
-            {
-              type: 'button',
-              role: 'menuitemradio',
-              'aria-checked': writeOwnMessage === true,
-              disabled,
-              style: style(S.chip, writeOwnMessage === true ? S.chipOn : undefined),
-              onClick: () => setWriteOwnMessage(true),
-            },
-            t('commit.mode.custom'),
-          ),
+          }),
+          aiButton,
         ),
-        ...(writeOwnMessage
-          ? [
-              React.createElement('textarea', {
-                key: 'commit-message',
-                style: S.customMessage,
-                value: customMessage,
-                rows: 2,
-                spellCheck: false,
-                placeholder: t('commit.customPlaceholder'),
-                'aria-label': t('commit.options'),
-                disabled,
-                onChange: (event) => setCustomMessage(event.target.value),
-              }),
-              React.createElement('div', { key: 'commit-note', style: S.hint }, t('commit.customNote')),
-            ]
-          : []),
+      ]
+
+      // The markers a pipeline reads. They stay beside the message that carries
+      // them, and the panel states what will be appended before the click.
+      const markerControls = [
         React.createElement('div', { key: 'commit-markers-label', style: S.hint }, t('commit.markers')),
         React.createElement(
           'div',
           { key: 'commit-markers', style: S.chips },
-          ...markerChips(['skip ci', 'release']),
+          ...markerChips(['skip ci', 'release', 'Pre-release', 'test']),
           React.createElement('input', {
             key: 'other-markers',
             style: S.markerInput,
             value: otherMarkers,
             spellCheck: false,
-            placeholder: t('commit.otherPlaceholder'),
+            // The rule lives where the field is: a marker is appended to the
+            // subject line, and the input says so instead of a line under it.
+            placeholder: t('commit.markerHint'),
             'aria-label': t('commit.otherMarkers'),
             disabled,
-            onChange: (event) => setOtherMarkers(event.target.value),
+            onChange: (event) => changeMarkers(presetMarkers, event.target.value),
           }),
         ),
-        React.createElement('div', { key: 'commit-marker-hint', style: S.hint }, t('commit.markerHint')),
         // What will actually be appended, stated in the panel. A marker is
         // invisible once it is on the command line, and this state outlives one
         // commit — it stays until it is changed or the page reloads — so a
@@ -2285,8 +3252,9 @@ window.__ModuleLoader__.load({
                   disabled,
                   style: style(S.chip, disabled ? S.itemDisabled : undefined),
                   onClick: () => {
-                    setPresetMarkers(new Set())
-                    setOtherMarkers('')
+                    // Clear takes the markers back out of the message too — the
+                    // box is the record, so it must not keep what was cleared.
+                    changeMarkers(new Set(), '')
                   },
                 },
                 t('commit.markerClear'),
@@ -2313,53 +3281,21 @@ window.__ModuleLoader__.load({
                     ? t('changes.selected', { count: selected.length, total: named.length })
                     : t('changes.all', { total: named.length }),
               ),
-              ...selectable.map((entry) =>
-                React.createElement(
-                  'div',
-                  { key: `change-${entry[0]}`, style: S.changeRow },
-                  React.createElement('input', {
-                    type: 'checkbox',
-                    checked: !excluded.has(entry[0]),
-                    disabled,
-                    'aria-label': t('changes.include', { path: entry[0] }),
-                    onChange: () => togglePath(entry[0]),
-                  }),
-                  React.createElement(
-                    'span',
-                    { style: S.changePath, title: `${entry[0]} — ${changeWords(entry[1], t)}` },
-                    entry[0],
-                  ),
-                  React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      disabled,
-                      style: style(S.changeAction, disabled ? S.itemDisabled : undefined),
-                      title: t('changes.diffLabel', { path: entry[0] }),
-                      onClick: () => {
-                        // A patch is a document: it is compared against another
-                        // patch, kept open while the change list is read, and closed
-                        // when it is done with. So it gets a tab of its own, and the
-                        // change list stays where it was. Without the dock's tab
-                        // registry the pane is the fallback, and without a sidebar at
-                        // all the patch renders in the menu — the same answer at
-                        // three levels of capability.
-                        if (openDiffTab !== null && sessionId !== undefined) {
-                          openDiffTab(sessionId, entry[0])
-                          return
-                        }
-                        if (openSidebar !== null) {
-                          pendingDiff.set(sessionId, entry[0])
-                          openSidebar()
-                          return
-                        }
-                        void run(`/github diff --file "${entry[0]}"${dirSuffix(sessionId)}`).then(() => refresh())
-                      },
-                    },
-                    t('changes.diff'),
-                  ),
-                ),
-              ),
+              React.createElement(ChangesTree, {
+                key: 'changes-tree',
+                entries: named.map((entry) => ({ path: entry[0], code: entry[1], from: entry[2] })),
+                t,
+                disabled,
+                excluded,
+                collapsed: collapsedDirs,
+                onTogglePath: togglePath,
+                onTogglePaths: togglePaths,
+                onToggleDir: toggleDir,
+                onOpenDiff: openDiffFor,
+                onPrefetchDiff: (path) => {
+                  void prefetchDiff(sessionId, path)
+                },
+              }),
               ...(probe?.changesTruncated === true
                 ? [React.createElement('div', { key: 'changes-more', style: S.hint }, t('changes.truncated', { shown: named.length }))]
                 : []),
@@ -2411,85 +3347,117 @@ window.__ModuleLoader__.load({
         if (name.length === 0) return
         void run(`/github switch --create "${name}"${dirSuffix(sessionId)}`).then(() => {
           setBranchName('')
+          setBranchCreating(false)
           void refresh()
         })
       }
 
-      const branchesPanel =
+      const NEW_BRANCH = '__new_branch__'
+      const currentBranchName = branchList.find((entry) => entry.current === true)?.name ?? null
+
+      // The branch row: one select for switching, and a control that turns the
+      // row into a name field. A list of radio buttons was what the panel used to
+      // draw; a select is the shape a control that changes the whole panel below
+      // it should have, and it stays one line wide in a narrow column.
+      const branchSelector =
         branchList.length === 0 && remoteList.length === 0
           ? null
           : [
-              React.createElement('div', { key: 'branches-label', style: S.hint }, t('branches.title')),
-              ...(goneNote === null ? [] : [goneNote]),
-              ...branchList.map((entry) => {
-                const track = `${entry.ahead > 0 ? ` ↑${entry.ahead}` : ''}${entry.behind > 0 ? ` ↓${entry.behind}` : ''}`
-                return React.createElement(
-                  'button',
-                  {
-                    key: `branch-${entry.name}`,
-                    type: 'button',
-                    role: 'menuitemradio',
-                    'aria-checked': entry.current === true,
-                    disabled: disabled || entry.current === true,
-                    title: entry.current === true ? t('branches.current') : t('branches.switchLabel', { name: entry.name }),
-                    style: style(S.item, disabled || entry.current === true ? S.itemDisabled : undefined),
-                    onClick: () => {
-                      void run(`/github switch "${entry.name}"${dirSuffix(sessionId)}`).then(() => refresh())
-                    },
-                  },
-                  `${entry.current === true ? '● ' : '○ '}${entry.name}${track}${entry.gone === true ? ` ${t('branches.gone')}` : ''}`,
-                )
-              }),
-              // The remote-only branches come after the local ones: switching to
-              // one creates the local branch that tracks it, which is the action
-              // that follows a rename on the remote.
-              ...(remoteList.length === 0
-                ? []
-                : [
-                    React.createElement('div', { key: 'branches-remote-label', style: S.hint }, t('branches.remoteTitle')),
-                    ...remoteList.map((entry) =>
-                      React.createElement(
-                        'button',
-                        {
-                          key: `branch-remote-${entry.name}`,
-                          type: 'button',
-                          role: 'menuitem',
-                          title: t('branches.switchLabel', { name: entry.name }),
-                          disabled,
-                          style: style(S.item, disabled ? S.itemDisabled : undefined),
-                          onClick: () => {
-                            void run(`/github switch "${entry.name}"${dirSuffix(sessionId)}`).then(() => refresh())
-                          },
-                        },
-                        `○ ${entry.name}${entry.default === true ? ` · ${t('branches.default')}` : ''}`,
-                      ),
-                    ),
-                  ]),
               React.createElement(
                 'div',
-                { key: 'branch-new', style: S.field },
-                React.createElement('input', {
-                  style: S.input,
-                  placeholder: t('branches.newPlaceholder'),
-                  value: branchName,
-                  spellCheck: false,
-                  'aria-label': t('branches.newLabel'),
-                  onChange: (event) => setBranchName(event.target.value),
-                  onKeyDown: (event) => {
-                    if (event.key === 'Enter') createBranch()
+                { key: 'branch-row', style: S.branchRow },
+                React.createElement('span', { key: 'branch-label', style: S.branchLabel }, t('branches.title')),
+                React.createElement(
+                  'select',
+                  {
+                    key: 'branch-select',
+                    style: S.select,
+                    value: branchCreating ? NEW_BRANCH : (currentBranchName ?? ''),
+                    disabled: disabled || branchList.length === 0,
+                    'aria-label': t('branches.title'),
+                    onChange: (event) => {
+                      const value = event.target.value
+                      if (value === NEW_BRANCH) {
+                        setBranchCreating(true)
+                        return
+                      }
+                      setBranchCreating(false)
+                      if (value.length === 0) return
+                      void run(`/github switch "${value}"${dirSuffix(sessionId)}`).then(() => refresh())
+                    },
                   },
-                }),
+                  ...branchList.map((entry) =>
+                    React.createElement(
+                      'option',
+                      { key: `branch-${entry.name}`, value: entry.name },
+                      `${entry.name}${entry.ahead > 0 ? ` ↑${entry.ahead}` : ''}${
+                        entry.behind > 0 ? ` ↓${entry.behind}` : ''
+                      }${entry.gone === true ? ` ${t('branches.gone')}` : ''}`,
+                    ),
+                  ),
+                  // A branch only the remote has is still switchable: choosing it
+                  // creates the local branch that tracks it, which is what follows
+                  // a rename on the remote.
+                  ...remoteList.map((entry) =>
+                    React.createElement(
+                      'option',
+                      { key: `branch-remote-${entry.name}`, value: entry.name },
+                      `${entry.name}${entry.default === true ? ` · ${t('branches.default')}` : ''}`,
+                    ),
+                  ),
+                  React.createElement('option', { key: NEW_BRANCH, value: NEW_BRANCH }, t('branches.newOption')),
+                ),
                 React.createElement(
                   'button',
                   {
+                    key: 'branch-create-toggle',
                     type: 'button',
-                    disabled: disabled || branchName.trim().length === 0,
-                    style: style(S.action, disabled || branchName.trim().length === 0 ? S.itemDisabled : undefined),
-                    onClick: () => createBranch(),
+                    className: 'gsy-iconbtn',
+                    disabled,
+                    title: t('branches.create'),
+                    'aria-label': t('branches.create'),
+                    onClick: () => {
+                      setBranchCreating((current) => !current)
+                      setBranchName('')
+                    },
                   },
-                  t('branches.create'),
+                  React.createElement(
+                    'svg',
+                    { viewBox: '0 0 16 16', width: 12, height: 12, fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', 'aria-hidden': true },
+                    React.createElement('path', { d: 'M8 3.5v9M3.5 8h9' }),
+                  ),
                 ),
               ),
+              ...(goneNote === null ? [] : [goneNote]),
+              ...(branchCreating
+                ? [
+                    React.createElement(
+                      'div',
+                      { key: 'branch-new', style: S.field },
+                      React.createElement('input', {
+                        style: S.input,
+                        placeholder: t('branches.newPlaceholder'),
+                        value: branchName,
+                        spellCheck: false,
+                        'aria-label': t('branches.newLabel'),
+                        onChange: (event) => setBranchName(event.target.value),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') createBranch()
+                        },
+                      }),
+                      React.createElement(
+                        'button',
+                        {
+                          type: 'button',
+                          disabled: disabled || branchName.trim().length === 0,
+                          style: style(S.action, disabled || branchName.trim().length === 0 ? S.itemDisabled : undefined),
+                          onClick: () => createBranch(),
+                        },
+                        t('branches.create'),
+                      ),
+                    ),
+                  ]
+                : []),
               ...(probe?.branchesTruncated === true
                 ? [React.createElement('div', { key: 'branches-more', style: S.hint }, t('branches.truncated', { shown: branchList.length }))]
                 : []),
@@ -2577,68 +3545,60 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
-              disabled: disabled || url.trim().length === 0 || needCustom,
-              title: needCustom ? t('commit.needCustom') : undefined,
-              style: style(S.action, disabled || url.trim().length === 0 || needCustom ? S.itemDisabled : undefined),
+              disabled: disabled || url.trim().length === 0,
+              style: style(S.action, disabled || url.trim().length === 0 ? S.itemDisabled : undefined),
               onClick: () => submitUrl(command),
             },
             label,
           ),
         )
 
-      const repoMenu = (remoteMissing ? CONNECT_ACTIONS : REPO_ACTIONS).map((action) => {
-        // Commit and sync are the two actions a narrowed selection changes; the
-        // label says how many paths will go in, so the effect of unticking is
-        // visible before the click.
-        const commitLike = action.id === 'commit' || action.id === 'sync'
-        const blocked = commitLike && (nothingSelected || needCustom)
-        const label = commitLike && narrowing ? `${t(action.key)} · ${selected.length}` : t(action.key)
-        return React.createElement(
-          'button',
-          {
-            key: action.id,
-            type: 'button',
-            role: 'menuitem',
-            disabled: disabled || blocked,
-            title: blocked ? t('changes.noneSelected') : undefined,
-            style: style(S.item, disabled || blocked ? S.itemDisabled : pendingAction === action.id ? S.itemPending : undefined),
-            onClick: () => {
-              // A commit-shaped action asks first: the message and the markers are
-              // decided here, and the click that says "record this" is the confirm
-              // button in that step. Clicking the same action again backs out.
-              if (commitLike) {
-                setPendingAction((current) => (current === action.id ? null : action.id))
-                return
-              }
-              void run(`/github ${action.id}${dirSuffix(sessionId)}`).then(() => refresh())
-            },
-          },
-          label,
-        )
-      })
+      // A commit needs something to say. The message is typed or generated, and
+      // the controls that record it appear only once it holds a line — so a click
+      // on "commit" is never a click that first has to decide what to write.
+      const commitReady = messageText.length > 0 && !nothingSelected
 
-      // The switch for what Commit & push does with a moved upstream. It lives
-      // beside the actions rather than inside the commit step so it is visible
-      // before the step is entered — the whole point of a switch is to be seen.
+      /** Record the selected paths, and publish them when there is a remote. */
+      const commitNow = () => {
+        if (!commitReady || disabled) return
+        // A recorded selection belongs to the commit that used it: the next change
+        // to the same path starts included again.
+        setExcluded(new Set())
+        // Without a remote there is nothing to publish to, so the same click
+        // records a local commit instead of failing on a push.
+        const action = remoteMissing ? 'commit' : 'sync'
+        const suffix = `${dirSuffix(sessionId)}${fileSuffix}${commitSuffix}${remoteMissing ? '' : integrateSuffix}`
+        void run(`/github ${action}${suffix}`).then((result) => {
+          // The message belongs to the commit that just happened; keeping it would
+          // hand the next commit a title written for the previous one. A failed
+          // run keeps it, so the click can be retried unchanged.
+          if (result?.failure == null) {
+            setMessage('')
+            setPresetMarkers(new Set())
+            setOtherMarkers('')
+          }
+          void refresh()
+        })
+      }
+
+      // The checkbox for what Commit & push does with a moved upstream. It sits
+      // beside the commit button, and appears with it: the choice only exists
+      // once there is a commit to make.
       const integrateToggle =
         remoteMissing
           ? null
           : React.createElement(
-              'div',
-              { key: 'integrate', style: S.markerSummary },
-              React.createElement(
-                'button',
-                {
-                  type: 'button',
-                  role: 'menuitemcheckbox',
-                  'aria-checked': integrateOn,
-                  title: t('integrate.hint'),
-                  disabled,
-                  style: style(S.chip, integrateOn ? S.chipOnGreen : undefined),
-                  onClick: toggleIntegrate,
-                },
-                integrateOn ? `✓ ${t('action.integrate')}` : t('action.integrate'),
-              ),
+              'label',
+              { key: 'integrate', className: 'gsy-check-row', title: t('integrate.hint') },
+              React.createElement('input', {
+                type: 'checkbox',
+                className: 'gsy-check',
+                checked: integrateOn === true,
+                disabled,
+                'aria-label': t('action.integrate'),
+                onChange: () => toggleIntegrate(),
+              }),
+              React.createElement('span', null, t('action.integrate')),
             )
 
       // The switch is on by default, but if it was turned off while the upstream
@@ -2656,10 +3616,10 @@ window.__ModuleLoader__.load({
             )
           : null
 
-      // A jump out of the menu to the project's page. An anchor rather than a
-      // button: `target="_blank"` is what carries the click to the browser, and
-      // the desktop shell turns exactly that into its own external open. The
-      // menu closes on the click, so coming back to the window starts fresh.
+      // A jump out of the panel to the project's page, as the title bar's own
+      // control. It stays an anchor rather than a button: `target="_blank"` is
+      // what carries the click to the browser, and the desktop shell turns exactly
+      // that into its own external open.
       const openWebItem =
         webUrl === null
           ? null
@@ -2670,68 +3630,107 @@ window.__ModuleLoader__.load({
                 href: webUrl,
                 target: '_blank',
                 rel: 'noopener noreferrer',
-                role: 'menuitem',
+                className: 'gsy-iconbtn',
                 title: webUrl,
-                style: S.item,
+                'aria-label': t('action.openWeb'),
                 onClick: () => {
                   // After the click's own default action, so removing the menu
                   // cannot be what cancels the navigation it just started.
                   if (surface === 'menu') setTimeout(() => setOpen(false), 0)
                 },
               },
-              t('action.openWeb'),
+              React.createElement(
+                'svg',
+                { viewBox: '0 0 16 16', width: 13, height: 13, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+                React.createElement('path', { d: 'M6 3.5h6.5V10' }),
+                React.createElement('path', { d: 'M12.5 3.5 6.8 9.2' }),
+                React.createElement('path', { d: 'M11 9.6v2.9H3.5V5h2.9' }),
+              ),
             )
 
-      // The step a commit-shaped action enters: what will be recorded, the message
-      // that records it, the markers a pipeline reads, and the click that does it.
-      const pendingLabel = pendingAction === null ? '' : t(pendingAction === 'sync' ? 'action.sync' : 'action.commit')
-      const commitStep =
-        pendingAction === null
-          ? null
-          : [
+      // The title bar's actions: pull, the project page, and a refresh — in that
+      // order, with refresh last, because it is the control reached for after
+      // reading what the others reported.
+      const pullButton = isRepo
+        ? React.createElement(
+            'button',
+            {
+              key: 'header-pull',
+              type: 'button',
+              className: 'gsy-iconbtn',
+              disabled: disabled || remoteMissing,
+              title: t('action.pull'),
+              'aria-label': t('action.pull'),
+              onClick: () => {
+                void run(`/github pull${dirSuffix(sessionId)}`).then(() => refresh())
+              },
+            },
+            React.createElement(
+              'svg',
+              { viewBox: '0 0 16 16', width: 13, height: 13, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+              React.createElement('path', { d: 'M8 2.5v7.2' }),
+              React.createElement('path', { d: 'M5 7l3 3 3-3' }),
+              React.createElement('path', { d: 'M3 12.5h10' }),
+            ),
+          )
+        : null
+
+      const refreshButton = React.createElement(
+        'button',
+        {
+          key: 'header-refresh',
+          type: 'button',
+          className: 'gsy-iconbtn',
+          disabled,
+          title: t('action.refresh'),
+          'aria-label': t('action.refresh'),
+          onClick: () => {
+            probeFresh.delete(sessionId)
+            void refresh(sessionId, true, { fetch: true })
+          },
+        },
+        React.createElement(
+          'svg',
+          { viewBox: '0 0 16 16', width: 13, height: 13, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          React.createElement('path', { d: 'M13 8a5 5 0 1 1-1.6-3.7' }),
+          React.createElement('path', { d: 'M13 2.8v2.9H10' }),
+        ),
+      )
+
+      const headActions = React.createElement(
+        'span',
+        { key: 'head-actions', className: 'gsy-head-actions' },
+        pullButton,
+        openWebItem,
+        refreshButton,
+      )
+
+      // The commit controls: the checkbox for how a moved upstream is handled, and
+      // the button that records and publishes what the box says. Both appear only
+      // once the box holds a message — the same rule the button follows, so the
+      // panel never offers a decision that cannot be carried out. The checkbox
+      // comes first: it modifies the click beside it, and is read before it.
+      const commitActions = commitReady
+        ? [
+            React.createElement(
+              'div',
+              { key: 'commit-actions', className: 'gsy-commit-actions' },
+              integrateToggle,
               React.createElement(
-                'div',
-                { key: 'commit-step', style: S.hint },
-                t('commit.step', { action: pendingLabel, count: selected.length }),
+                'button',
+                {
+                  type: 'button',
+                  disabled,
+                  style: style(S.chipConfirm, disabled ? { opacity: 0.4, cursor: 'default' } : undefined),
+                  onClick: commitNow,
+                },
+                narrowing
+                  ? `${t(remoteMissing ? 'action.commit' : 'action.sync')} · ${selected.length}`
+                  : t(remoteMissing ? 'action.commit' : 'action.sync'),
               ),
-              ...commitOptions,
-              React.createElement(
-                'div',
-                { key: 'commit-step-buttons', style: S.chips },
-                React.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    disabled: disabled || needCustom,
-                    title: needCustom ? t('commit.needCustom') : undefined,
-                    style: style(
-                      S.chipConfirm,
-                      disabled || needCustom ? { opacity: 0.4, cursor: 'default' } : undefined,
-                    ),
-                    onClick: () => {
-                      const action = pendingAction
-                      setPendingAction(null)
-                      // A recorded selection belongs to the commit that used it: the
-                      // next change to the same path starts included again.
-                      setExcluded(new Set())
-                      void run(
-                        `/github ${action}${dirSuffix(sessionId)}${fileSuffix}${commitSuffix}${
-                          action === 'sync' ? integrateSuffix : ''
-                        }`,
-                      ).then(() => refresh())
-                    },
-                  },
-                  // The click says what it will do: publishing is not the same act as
-                  // recording, and the button is the last thing read before either.
-                  t(pendingAction === 'sync' ? 'commit.confirmPush' : 'commit.confirm'),
-                ),
-                React.createElement(
-                  'button',
-                  { type: 'button', style: S.chip, onClick: () => setPendingAction(null) },
-                  t('commit.cancel'),
-                ),
-              ),
-            ]
+            ),
+          ]
+        : []
 
       // A local repository with no remote needs one, and this is where it gets
       // one: the URL connects `origin`, then commits and pushes in the same
@@ -2796,7 +3795,7 @@ window.__ModuleLoader__.load({
           React.createElement('span', { style: S.headTitle }, t('title')),
           React.createElement(
             'span',
-            null,
+            { key: 'head-state', style: S.headState },
             actionBusy === null
               ? // Both halves, because they update by different means: a page
                 // reload replaces the control (rN) while the Host keeps the
@@ -2807,28 +3806,10 @@ window.__ModuleLoader__.load({
                 : BUILD
               : t('menu.running', { action: actionBusy.replace('/github ', '') }),
           ),
-          // The pane has room for a refresh control of its own, and asking again
-          // is the one thing a persistent panel needs that a menu does not.
-          surface === 'pane'
-            ? React.createElement(
-                'button',
-                {
-                  key: 'pane-refresh',
-                  type: 'button',
-                  disabled,
-                  style: style(S.chip, disabled ? S.itemDisabled : undefined),
-                  onClick: () => {
-                    probeFresh.delete(sessionId)
-                    void refresh(sessionId, true, { fetch: true })
-                  },
-                },
-                t('action.refresh'),
-              )
-            : null,
+          // Pull, the project page, and a refresh — the three reads that do not
+          // depend on the change list, so they live in the title bar.
+          probeError === null ? headActions : null,
         ),
-        // The jump to the project page belongs above the state line: it is the
-        // first thing to reach for, and it does not depend on the change list.
-        probeError === null && isRepo ? openWebItem : null,
         busy === null
           ? React.createElement(
               'div',
@@ -2867,24 +3848,22 @@ window.__ModuleLoader__.load({
               },
               t('action.retry'),
             ),
-        // The change list sits above the actions it narrows: what is about
-        // to be committed is the question the buttons below answer, and the
-        // message options are part of the same question.
+        // The branch the panel below describes. It comes before the list because
+        // it is what the list is a reading of, and it is one select rather than a
+        // stack of rows.
+        probeError === null && isRepo ? branchSelector : null,
+        // The message box, its markers, and the controls that appear once the box
+        // holds something to say. Offered only where a commit can be made.
+        probeError === null && isRepo && named.length > 0 ? commitBox : null,
+        // The markers describe a title: without one there is nothing to append to,
+        // so the chips and their field appear only once the box holds a message.
+        probeError === null && isRepo && named.length > 0 && messageText.length > 0 ? markerControls : null,
+        probeError === null && isRepo && named.length > 0 ? commitActions : null,
+        probeError === null && isRepo && commitReady ? integrateBehind : null,
+        // The change list last: what is about to be committed, and the only thing
+        // under the controls that act on it.
         probeError === null && isRepo ? changesPanel : null,
         probeError === null && isRepo ? hiddenNote : null,
-        // The repository actions are offered while the check is still in
-        // flight as well, so a probe that never answers degrades the menu
-        // to "unverified" rather than freezing it. Without an answer the
-        // clone and init entries are withheld, because offering them for a
-        // workspace that may already be a repository is the worse guess.
-        probeError === null && (probe === null || isRepo) ? repoMenu : null,
-        // Beside the action it modifies, and only where that action exists.
-        probeError === null && isRepo ? integrateToggle : null,
-        probeError === null ? integrateBehind : null,
-        // Directly under the buttons it belongs to, and only while one of them is
-        // waiting to be confirmed.
-        probeError === null && (probe === null || isRepo) ? commitStep : null,
-        probeError === null && isRepo ? branchesPanel : null,
         probeError === null && remoteMissing ? connectMenu : null,
         probe !== null && !isRepo ? emptyMenu : null,
         // Offered last, because it changes what everything above acts on.

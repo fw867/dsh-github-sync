@@ -6,7 +6,7 @@ operation engine with three entry points:
 | Surface | Entry point |
 |---|---|
 | Agent tools | `github_clone` and `github_sync` |
-| Human command | `/github status\|changes\|diff\|stage\|unstage\|commit\|amend\|undo\|branches\|switch\|delete-branch\|pull\|push\|sync\|clone <repo>\|init [url]\|setup <url>\|auth` |
+| Human command | `/github status\|changes\|diff\|stage\|unstage\|commit\|message\|amend\|undo\|branches\|switch\|delete-branch\|pull\|push\|sync\|clone <repo>\|init [url]\|setup <url>\|auth` |
 | Composer UI | a **GitHub** button in the composer tool row that shows the branch and offers these actions |
 
 All three drive the same engine, so a button press, a slash command, and a model
@@ -92,22 +92,32 @@ state out: `main · uncommitted changes · 2 to push · 1 to pull`. A repository
 whose upstream counts are unknown — no remote, or no upstream branch — shows the
 branch with no arrows rather than a made-up zero.
 
-The menu offers:
+The panel is the composer button's popup and the sidebar's GitHub tab at once:
 
-- **Refresh status** — working tree and upstream state
-- **Pull** — fetch and integrate the remote branch
-- **Commit & push** — stage everything, commit with a generated subject,
-  integrate the upstream, push
-- **Push only** — publish the current branch. `/github push <branch>` publishes a
-  named one instead, which is also the deliberate way to recreate a branch the
-  remote deleted (see [A default branch renamed on the remote](#a-default-branch-renamed-on-the-remote)).
-- **Auto-rebase before push** — the switch that decides whether Commit & push
-  replays local commits onto the upstream first. It starts from
-  `integrateBeforePush`; a click is remembered in this browser and travels with
-  the sync command, so the panel and the Host cannot disagree.
+- **Title bar** — *Pull*, *Open project on GitHub*, and *Refresh status*, in that
+  order. The two reads and the one navigation do not depend on the change list,
+  so they sit above it; refresh is last, because it is the control reached for
+  after reading what the others reported.
+- **Message box** — shown only while the workspace has changes. Type the commit
+  message, or press the **AI** button on its right to have one written: the Host
+  reads the working tree (tracked changes against `HEAD`, plus every new file as
+  the addition it is), asks the configured model, and fills the box with the
+  subject. Nothing is staged or committed by that request.
+- **Auto-rebase before push** and **Commit & push** — appear only once the
+  message box holds a line, so a click on *Commit* is never a click that first has
+  to decide what to say. The checkbox comes first, because it modifies the click
+  beside it and is read before it. Commit & push stages the ticked paths, records
+  the message, integrates the upstream when the checkbox is on, and publishes; a
+  repository with no remote gets the same click as *Commit locally* instead,
+  because there is nothing to publish to.
+- **Branches** — one select listing the local branches (with their drift), the
+  branches only the remote has, and *＋ New branch…*; choosing one switches to it,
+  choosing the last turns the row into a name field. A branch only the remote has
+  is switchable, and choosing it creates the local branch that tracks it — which
+  is the way back after a rename on the remote.
 - **Open project on GitHub** — leave DSH for the repository's home page in the
   browser. The Host derives the address from the configured remote and omits the
-  item when that remote has no browsable page (a local path, for example).
+  control when that remote has no browsable page (a local path, for example).
 
 ### Nothing is published on top of a moved upstream
 
@@ -137,15 +147,16 @@ off:
     integrateBeforePush: false
 ```
 
-The same choice is visible in the menu as **Auto-rebase before push**, under the
-repository actions. It starts checked from the deployment default and is
-remembered in the browser; clicking it sends `--integrate` or `--no-integrate`
-with the next `/github sync`, so the command line records which choice was in
-force. Clicking back to the deployment's value forgets the browser override
-instead of pinning it. If the switch is off and the probe reports the upstream
-has moved, the menu says so before the click that would be refused. The YAML
-setting remains the default for model tools and for slash commands that do not
-pass a flag. On the command line the override is explicit:
+The same choice is visible in the panel as the **Auto-rebase before push**
+checkbox, beside the commit button and appearing with it. It starts checked from
+the deployment default and is remembered in the browser; ticking it sends
+`--integrate` or `--no-integrate` with the next `/github sync`, so the command
+line records which choice was in force. Clicking back to the deployment's value
+forgets the browser override instead of pinning it. If the box is clear and the
+probe reports the upstream has moved, the panel says so before the click that
+would be refused. The YAML setting remains the default for model tools and for
+slash commands that do not pass a flag. On the command line the override is
+explicit:
 
 ```
 /github sync --integrate       replay onto the upstream before pushing
@@ -201,40 +212,56 @@ elsewhere is covering the thing the person just clicked.
 
 ### Choosing the message, and the markers CI reads
 
-Every commit-shaped action in the menu — **Commit & push** for a repository with a
-remote, **Commit locally** for one without — **asks before it records**. Clicking
-one opens a step under the buttons:
+The panel does not ask twice. A repository with changes gets one message box;
+the controls that record it appear **once the box holds a line**. That is the
+whole contract: a click on *Commit & push* is never a click that first has to
+decide what to say.
 
 ```
-Commit & push · 3 path(s) will be recorded
-Commit message   [AI generated] [Write my own]
-CI markers       [skip ci] [release] [others…]
-                 [Confirm & push] [Cancel]
+[ commit message …                                 ] [✨]
+CI markers   [skip ci] [release] [Pre-release] [test] [others…]
+             Will add: [release]
+[ ] Auto-rebase before push   [Commit & push]
 ```
 
-The message and the markers belong to that decision, so they appear when the
-decision is being made instead of sitting in the panel the whole time — a panel
-that always shows a form for something nobody asked for reads as if it were already
-doing it. The step names the action and counts what will be recorded, the action's
-own button stays highlighted while it waits, and the blue button is the click that
-runs the command. Its word follows the action it will run: **Confirm & push** when
-the command publishes, **Record commit** for a local commit, where "push" would be
-a lie. Everything that backs out works the way a person expects: **Cancel**,
-clicking the action again, `Escape` (which leaves the step first and closes the menu
-only on a second press), and closing the menu — an unconfirmed step never survives
-to the next open.
+The message is typed or generated. The **AI** button beside the box asks the Host
+for a message; the Host reads the working tree — tracked changes against `HEAD`,
+plus each new file as the all-addition it is — asks the configured model, and
+answers **a subject and a body**. Both fill the box (`subject`, blank line,
+`body`), because that is what a commit records. It stages and commits nothing:
+pressing it is not yet a decision about what to record, and the box stays editable
+afterwards. A generation that fails says so in the output area and leaves the box
+alone, so the click can be tried again or the message typed by hand.
 
-The two choices the step carries:
+The request goes over the Host's own authenticated route
+(`POST /github-sync/message`) rather than the session command bridge: a message
+box is a read behind a click, it must not wait for the conversation's turn, and it
+must not leave a command row. The route runs the generation on the model's
+**lightest reasoning face** (the one the catalog advertises, when it advertises
+any) — a title does not need the deliberation a task does. A deployment without
+the route falls back to `/github message`, which answers the same message.
 
-| Choice | What it does |
-|---|---|
-| **AI generated** (default) | The message is generated from the staged changes, as described under [Commit messages](#commit-messages). |
-| **Write my own** | A field for the message: the first line is the subject, later lines become the body. **Record it** is disabled while it is empty, with the reason. A `"` is written as `'`, because the message travels on the `/github` line and that line is parsed by quoting. |
-| **CI markers** | `[skip ci]` and `[release]` as chips, plus a field for others (`hotfix, deploy`). A ticked chip fills and shows a `✓`, and the line under it states what the next commit will carry — `No marker will be added.` or `Will add: [release]` — with a **Clear** control once anything is set. |
+The commit controls appear only when there is something to commit *and*
+something to say: the box is offered only while the change list is non-empty, and
+the buttons only while the box holds a line (and at least one path is ticked).
+The blue button is the click that runs `/github sync`: it stages the ticked
+paths, records the message, integrates the upstream when the checkbox is on, and
+pushes. A message with a body travels as one quoted argument whose newlines are
+written `\n` and restored by the parser, so the body reaches `git commit` intact.
+
+**CI markers** are `[skip ci]`, `[release]`, `[Pre-release]`, and `[test]` as
+chips, plus a field for others (`hotfix, deploy`); that field's placeholder carries
+the rule — *appended to the subject line, right after the title* — instead of a
+hint line of its own. Ticking a chip, typing in that field, or pressing **Clear**
+edits the message box itself: the markers appear (or disappear) right after the
+title line, before any body, so what the box shows is what the commit records.
+Because markers describe a title, the chips and the field appear only once the
+box holds a message. The line under them states what the next commit will carry —
+`No marker will be added.` or `Will add: [release]` — with a **Clear** control
+once anything is set.
 
 The **Connect & push** row (`/github init <url>`, which commits and pushes as well)
-uses whatever the last step left selected, and defaults to the generated message
-with no markers.
+uses the message in the box and the selected markers.
 
 **The marker selection outlives one commit.** It is component state, so it survives
 commits within a session and is reset by a page reload — which is why the panel
@@ -277,13 +304,18 @@ Each file is self-contained:
 | `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
 | `test/branch-rename.mjs` | A default branch renamed on the remote, against real git: the probe names the remote default and the remote-only branch, a refresh fetches while a plain probe reports the stale name, switching creates the tracking branch, the listing reports it, a push and a pull from the old branch refuse with the reason instead of recreating or relaying git's error — while naming the branch still publishes it |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
-| `test/markers.mjs` | The menu control: nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
+| `test/markers.mjs` | The menu control: the chips and the field appear only once the box holds a message, ticking a chip writes the marker into the title and unticking takes it back out, nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |
 | `test/integrate-toggle.mjs` | Auto-rebase is on by default; the switch is remembered and travels as `--integrate`/`--no-integrate`; turning it off while behind warns before the refused push; the parser and Host agree on which setting wins |
 | `test/open-web.mjs` | The project-page jump: remote forms normalize to a browsable URL, local remotes do not, and the menu offers no dead link |
 | `test/sidebar-tab.mjs` | The dock services are declared dependencies (so activation waits for them), every sidebar type and its pane body register under one identity (so a restored tab renders), every status read is sidebar-only, and any other command keeps a one-line, minimum-height row |
 | `test/auto-open.mjs` | Only a repository session opens the sidebar, only when collapsed and asked for, and a call that lands before its store exists is retried |
 | `test/probes.mjs` | The command-row cost of each surface: one slim check on mount, one full check for the pane, and no second probe on a quick reopen |
 | `test/probe-merge.mjs` | A full request that arrives during a slim check is queued rather than dropped, the waiting surface is woken when it lands, the branch context survives a later slim answer, and a warm cache costs no probe |
+| `test/changes-tree.mjs` | The list's shape and the patch's row model, pure: a status code picks one badge and one tone, a chain compresses to `src/a`, directories sort before files and count their subtree, folding hides a subtree without losing its row, a repeated path counts once, a rename keeps its original path, a rewritten line pairs with its replacement (and only then is highlighted), split puts a rewrite on one row while a lone removal keeps one half, and a CRLF patch carries no carriage return into a row |
+| `test/untracked-diff.mjs` | A new file opens a patch against real git: a named untracked path is rendered as all-addition, a tracked modification keeps its ordinary patch, a staged review shows the index only (an untracked path has nothing in it), a whole-tree review stays `HEAD`-only, a binary new file is named, and the route's path guard refuses absolute, climbing and NUL-bearing paths |
+| `test/diff-route.mjs` | Both Host routes' contract: a good request reaches the engine with the session's workspace and the chosen directory, the answer is not cacheable, an untrusted request is refused before git, GET is 405, a missing session/path is 400, an unknown session is 404, a malformed body is 400, an engine failure is reported as a 500 rather than thrown, and the message route forwards only repository-relative paths, whole message included |
+| `test/diff-fast-path.mjs` | A click in the panel — the surface where the diff tab is not available — reads the patch over the Host route (one POST, no command), the patch renders, and a route that answers 404 still falls back to `/github diff --file` |
+| `test/message-suggest.mjs` | `/github message` is wired to the engine and forwards its `--file` paths; against real git, a message comes back for the working tree (tracked changes plus new files, subject and body), a narrowed request answers about the named path, a body's `\n` escapes survive the command line, and the index, the HEAD commit and the working tree are exactly as they were |
 
 They load the shipped `client.js` and read its dictionaries, so a renamed key or a
 changed default fails here rather than in the browser. The client publishes its
@@ -728,13 +760,25 @@ a commit records the listed paths and nothing else.
 
 The workspace check reports the change list along with the branch, so the menu
 needs no second command to draw it. Each path carries its git status code and a
-plain description of it (`staged added`, `modified, not staged`, `untracked`), and
-the menu shows them with a checkbox and a **Diff** button:
+plain description of it (`staged added`, `modified, not staged`, `untracked`),
+and the list is folded into the directory tree the change actually has:
 
-- **Ticked is the default.** Unticking a path narrows the next
-  **Commit locally** / **Commit & push**, whose label counts what will go in.
-  Untick everything and the buttons are disabled with the reason, rather than
-  sending a commit that can only do nothing.
+| Row | Shows |
+|---|---|
+| Directory | A compressed chain (`src/client/changes`), how many changed files sit beneath it, and one checkbox that ticks the whole subtree |
+| File | The porcelain letter in its tone colour (`M` amber, `A`/`U` green, `D` red, `R`/`C` blue), the file name, and a **Diff** action revealed on hover |
+| Rename | Both ends — `new.ts ← old.ts` — because "renamed" alone does not say what moved |
+
+A directory with no file of its own and exactly one subdirectory is compressed to
+one row, so a refactor under `src/client/changes/*` reads as one line instead of a
+wall of near-identical paths; the closed row still counts every file beneath it.
+Fold state belongs to the panel, not the probe: a refresh that re-reads the list
+never reopens a subtree that was closed on purpose.
+
+- **Ticked is the default.** Unticking a path — or a whole directory, with its
+  checkbox — narrows the next **Commit locally** / **Commit & push**, whose label
+  counts what will go in. Untick everything and the buttons are disabled with the
+  reason, rather than sending a commit that can only do nothing.
 - **Diff** asks for one path's patch, and opens it as **a tab of its own** in the
   right sidebar. A patch is a document: it is compared against another patch, kept
   open while the change list is read, and closed when it is done with. So it does
@@ -756,6 +800,36 @@ the menu shows them with a checkbox and a **Diff** button:
   It shows the change against `HEAD` — what committing that path as it stands
   would record — and falls back to the index in a repository with no commit yet.
 
+### Reading a patch
+
+A row is a read of the working tree, not a session operation, so its patch comes
+from a **Host route** — `POST /github-sync/diff`, answered by the same engine the
+tool and the command use — instead of the command bridge. A command is recorded
+in the conversation and serialized with the session's other work, which is why
+the old path made a click wait; the route answers from the Host directly. It is
+fenced by the connection service (an untrusted page never reaches git), refuses a
+path that is absolute or climbs out of the repository, and caches nothing
+server-side. A deployment without a web server, or an older Host, answers no
+route: the surface then falls back to `/github diff --file`, the same request a
+person could type.
+
+The route is asked from **every surface a row can open**, not just the diff tab:
+the sidebar pane and the panel's own inline fallback read it too. Only the
+capability ladder differs — a dock with the tab registry opens a tab, a pane
+renders the patch in place, a menu without either renders it below the actions —
+and none of them waits for a session command when the route exists.
+
+A hover reads the patch ahead of the click, so the click finds the answer in
+hand. A held patch is dropped the moment any command runs — that command may have
+changed the tree — and expires on its own after a few seconds.
+
+A file git does not track yet has **no patch under any `git diff` form**: it is in
+neither `HEAD` nor the index, which is why a new file used to open an empty tab.
+The engine renders it with `git diff --no-index -- /dev/null <path>`, so a new
+file opens as the all-addition it is and a binary one is named rather than dumped
+— for a named path only; a whole-tree review still reads `git diff HEAD`, which is
+what committing the tracked paths records.
+
 ### Rendering a patch
 
 The patch is not printed verbatim. `git diff` output is parsed into rows and drawn
@@ -768,6 +842,20 @@ as a comparison, because the raw text buries the change in metadata:
 | Added lines on the success colour, removed on the error colour | The engine's own `<path> (branch …)` and `- diff: …` wrapper |
 | The hunk header, on its own row | |
 
+The header chooses the layout. **Unified** is `git diff`'s own shape — removals and
+additions as separate rows. **Split** puts a rewritten line's two versions side by
+side, so one edited line is one row with a left and a right half; a row with no
+counterpart keeps one half empty rather than inventing content for the other. A
+file's CRLF endings are stripped before a row is drawn, so no row ends in an
+invisible carriage return.
+
+A rewritten line is **paired** with the line that replaced it — a run of deletions
+immediately followed by a run of additions, matched index by index, up to the
+shorter run — and only the paired rows carry **intra-line** runs. The common prefix
+and suffix are trimmed and the middle is highlighted, which is what makes a
+one-word edit read as one word. An unpaired deletion is a deletion, not a rewrite,
+and gets no intra-line highlight.
+
 A file whose patch carries no lines — a binary — is still **named**, with a note
 that there is nothing to compare, rather than dumping git's binary notice. Nothing
 is invented for it.
@@ -779,8 +867,9 @@ and a commit's own log all travel as the same outcome text.
 
 #### The test seam
 
-The module-level maps the two mounted instances communicate through, and the two
-pure functions the patch rendering is built from, live in the client bundle's
+The module-level maps the two mounted instances communicate through, and the pure
+functions the list and the patch rendering are built from — the status rule, the
+tree builder, the row pairing and the split model — live in the client bundle's
 factory closure: nothing outside can seed or observe them, and the bundle's only
 contract is a `load` call.
 
@@ -807,6 +896,7 @@ The same shape is on both other surfaces:
 /github stage --file "lib/a.js" --file "lib/b.js"
 /github unstage --file "lib/a.js"
 /github commit --file "lib/a.js"     commit that path, and only it
+/github message --file "lib/a.js"    write a subject for that path, commit nothing
 ```
 
 `github_sync` takes the same paths as `files`, plus `staged` and `stat` for
@@ -853,10 +943,10 @@ how far it has drifted (`↑2 ↓1`), whether the upstream is gone, and its rela
 date. Remote-tracking branches with no local counterpart are listed after the
 local ones (`on origin only: main`), because those are switchable too and are
 otherwise invisible — a default branch renamed on GitHub is exactly one of them.
-The menu renders the same list: the checked-out branch is marked `●` and
-not clickable, another branch is one click away, and a field creates a new one —
-creation is offered there because it cannot lose anything. **Deleting is
-deliberately not** a menu button: it is the one branch action that can drop
+The panel renders the same list as one select: the checked-out branch is selected,
+another branch is one choice away, and *＋ New branch…* turns the row into a name
+field — creation is offered there because it cannot lose anything. **Deleting is
+deliberately not** a panel control: it is the one branch action that can drop
 commits, so it takes a name and, for an unmerged branch, an explicit `--force`.
 
 ### A default branch renamed on the remote
@@ -871,8 +961,8 @@ handles that state rather than guessing past it:
 |---|---|
 | The badge turns amber with a clean tree | Once a full check has read it, the tracked upstream is gone; the tooltip says `upstream gone`. |
 | `The tracked branch origin/master is gone; the remote default is now main.` | A fetch found the rename. The note sits above the branch rows and states both ends. |
-| `○ master (gone)` | The local branch still exists; nothing has been published to it since the remote dropped it. |
-| `On the remote — ○ main · default` | The remote's new default, offered like any other branch. |
+| `master (gone)` in the branch select | The local branch still exists; nothing has been published to it since the remote dropped it. |
+| `main · default` in the branch select | The remote's new default, offered like any other branch. |
 
 Clicking the remote-only branch runs `git switch -c main --track origin/main`
 (`switch` records `now on main (tracking origin/main)`), so one click reconnects
@@ -1032,7 +1122,10 @@ silently changing behaviour mid-push — including an enumeration such as
 
 `commit` and `sync` stage what the change list showed, then produce a
 [Conventional Commits](https://www.conventionalcommits.org/) **message** — a
-subject line and a short body — in the language the workspace runs in:
+subject line and a short body — in the language the workspace runs in. The panel's
+**AI** button asks for the same message *before* anyone commits, through
+`/github message` (or the Host's `/github-sync/message` route): it reads the
+working tree instead of the index, so filling the box stages and records nothing.
 
 1. The model named by `commitProvider`/`commitModel`, else the **calling
    Session's selected model**, else the deployment default, is asked for the
