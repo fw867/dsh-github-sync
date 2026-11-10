@@ -666,7 +666,7 @@
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r56'
+    const BUILD = 'r57'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },

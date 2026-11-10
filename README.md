@@ -301,6 +301,7 @@ Each file is self-contained:
 | `test/commit-subject.mjs` | The deterministic subject: it names the change, never carries repository paths, and is composed within 72 characters rather than sliced at them — the `chore: 更新 app/src/…/A.kt、…/B.kt 等 …` regression |
 | `test/commit-retry.mjs` | The model call is retried before the fallback: a provider error, a thrown stream, and a reasoning-only answer each get another try (with a larger budget in the last case), an abort does not, and the fallback is reached only after every attempt |
 | `test/commit-generation.mjs` | The model request carries no `temperature` (reasoning models reject it), keeps `purpose: 'session-title'`, uses the selected provider/model, and a usable answer becomes the subject |
+| `test/commit-display.mjs` | A commit message is printed once, against real git: the step line names the provenance instead of quoting the message, git's `[branch sha] subject` echo keeps only the branch and id, a subject with no output block is still quoted, and an amend prints what it actually recorded — including the body a `--no-edit` amend kept |
 | `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
 | `test/branch-rename.mjs` | A default branch renamed on the remote, against real git: the probe names the remote default and the remote-only branch, a refresh fetches while a plain probe reports the stale name, switching creates the tracking branch, the listing reports it, a push and a pull from the old branch refuse with the reason instead of recreating or relaying git's error — while naming the branch still publishes it |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
@@ -1174,11 +1175,17 @@ Chinese messages without any configuration. `zh` and `en` force one. The
 changelog; only the prose is localized.
 
 A generated body is committed as a second `-m`, which is how git joins the
-paragraphs, and the commit step shows the message that landed followed by git's
-own summary — not an echoed command line carrying a multi-paragraph argument.
+paragraphs. The commit step prints the message **once** — as the paragraph block —
+with the step line above it naming where the message came from (`message provided`),
+and git's own summary below it keeping the branch and commit id. The message is not
+quoted again in the step line, and the subject git echoes in its `[branch sha]
+subject` line is trimmed: both were copies of the paragraph block in the same
+panel. `amend` prints what it actually recorded the same way — a `--no-edit` amend
+reads the kept message back, so its body is not silently replaced by the old title.
 
 Pass `--message "<subject>"` (command) or `message` (tool) to use a message
-verbatim instead — that path takes no body, since you wrote it.
+verbatim instead; that message may carry a body, and the same one-copy rule
+applies.
 
 ### Why the model call is shaped the way it is
 
