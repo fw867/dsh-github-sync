@@ -97,7 +97,10 @@ The panel is the composer button's popup and the sidebar's GitHub tab at once:
 - **Title bar** — *Pull*, *Open project on GitHub*, and *Refresh status*, in that
   order. The two reads and the one navigation do not depend on the change list,
   so they sit above it; refresh is last, because it is the control reached for
-  after reading what the others reported.
+  after reading what the others reported. Their flat icon look comes from the
+  plugin's own stylesheet, which is installed when the plugin activates — not by
+  whichever list happens to be drawn — so a workspace with no changes does not
+  fall back to the host's default button chrome.
 - **Message box** — shown only while the workspace has changes. Type the commit
   message, or press the **AI** button on its right to have one written: the Host
   reads the working tree (tracked changes against `HEAD`, plus every new file as
@@ -303,6 +306,7 @@ Each file is self-contained:
 | `test/commit-generation.mjs` | The model request carries no `temperature` (reasoning models reject it), keeps `purpose: 'session-title'`, uses the selected provider/model, and a usable answer becomes the subject |
 | `test/commit-display.mjs` | A commit message is printed once, against real git: the step line names the provenance instead of quoting the message, git's `[branch sha] subject` echo keeps only the branch and id, a subject with no output block is still quoted, and an amend prints what it actually recorded — including the body a `--no-edit` amend kept |
 | `test/panel-refresh.mjs` | A panel that is on screen re-reads the workspace on its interval: one timer while it is visible, one probe per interval, no tick while the tab is hidden or a probe is in flight, and the timer is cleared when the panel closes |
+| `test/panel-styles.mjs` | The panel installs its own stylesheet on a clean workspace too — where neither the change tree nor a diff mounts — so the header's class-styled icon buttons keep their look, and a second draw adds no duplicate `<style>` |
 | `test/branch-rename.mjs` | A default branch renamed on the remote, against real git: the probe names the remote default and the remote-only branch, a refresh fetches while a plain probe reports the stale name, switching creates the tracking branch, the listing reports it, a push and a pull from the old branch refuse with the reason instead of recreating or relaying git's error — while naming the branch still publishes it |
 | `test/commit-markers.mjs` | The strip, against real git: the marker control decides, prose brackets survive, a selected marker is never doubled |
 | `test/markers.mjs` | The menu control: the chips and the field appear only once the box holds a message, ticking a chip writes the marker into the title and unticking takes it back out, nothing selected appends nothing, a ticked chip appends once, **Clear** empties both fields, and the panel's own "Will add:" line matches the command that is issued |

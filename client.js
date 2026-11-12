@@ -666,7 +666,7 @@
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r57'
+    const BUILD = 'r58'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -2239,6 +2239,11 @@
      *   locale service's bound `t` are read.
      */
     function GithubSyncButton(props) {
+      // The sheet is installed here, not only from the change tree and the diff
+      // view: a clean working tree mounts neither, and the title bar's icons are
+      // class-styled — without this, a panel opened on a clean workspace drew them
+      // with the host's default button chrome (border, padding, background).
+      ensureStyles()
       const sessionId = props.sessionId
       const remote = props.remote
       const t = props.t ?? ((key) => key)
@@ -3978,6 +3983,11 @@
       // restarts. Declaring them makes activation wait for the dock.
       inject: ['slots', 'remote', 'remote.commands', 'locale', 'sidebarRight', 'sidebarRightTabs'],
       apply(ctx) {
+        // The sheet belongs to the plugin, not to one surface: a panel on a clean
+        // workspace mounts neither the change tree nor a diff, and the title bar's
+        // icons are styled by class. Installing it here means no component has to
+        // be the one that happens to bring the styles.
+        ensureStyles()
         // Both dictionaries are registered under one namespace; the Client's
         // active locale selects between them, and English is the fallback for
         // any locale this plugin does not translate.
