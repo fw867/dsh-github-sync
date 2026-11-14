@@ -666,7 +666,7 @@
      * so the menu states which revision it is running. Remove once the control
      * is settled.
      */
-    const BUILD = 'r58'
+    const BUILD = 'r60'
 
     const S = {
       wrap: { position: 'relative', display: 'inline-flex' },
@@ -1392,6 +1392,25 @@
     }
 
     /**
+     * The session a diff address was recorded for, or null when it is not one.
+     *
+     * The address encodes the session because the tab outlives the session switch:
+     * a kept-mounted body would otherwise read the file against whichever session
+     * is in front now instead of the one the patch belongs to.
+     */
+    function diffSessionOf(address) {
+      if (typeof address !== 'string' || !address.startsWith(DIFF_PREFIX)) return null
+      const rest = address.slice(DIFF_PREFIX.length)
+      const slash = rest.indexOf('/')
+      if (slash <= 0) return null
+      try {
+        return decodeURIComponent(rest.slice(0, slash))
+      } catch {
+        return rest.slice(0, slash)
+      }
+    }
+
+    /**
      * The Host route a patch is read from, when the Host half registered one.
      *
      * A relative path resolved against the page's own base: a GUI under a
@@ -1548,8 +1567,17 @@
      * patch when the menu closes.
      */
     function GithubDiffTab(props) {
-      const address = props?.address ?? props?.tab?.address ?? null
-      const sessionId = props?.sessionId
+      // A resource tab's address is not a prop: the slot hands every body the
+      // `useTabInfo` hook, and the tab's `contentId` IS the address it was opened
+      // with. Reading `props.address` found nothing, so the tab claimed no file to
+      // compare for a file that had just been clicked.
+      const useTabInfo = typeof props?.useTabInfo === 'function' ? props.useTabInfo : () => undefined
+      const tabInfo = useTabInfo()
+      const address =
+        tabInfo?.tab?.contentId ?? tabInfo?.tab?.navigation?.address ?? props?.address ?? null
+      // The address names the session it belongs to; a kept-mounted tab must keep
+      // reading that workspace after a session switch, not whichever is in front.
+      const sessionId = diffSessionOf(address) ?? props?.sessionId
       const remote = props?.remote
       const t = props?.t ?? ((key) => key)
       const path = diffPathOf(address)
@@ -2988,10 +3016,12 @@
        * and a deployment with neither still has the command bridge.
        */
       const openDiffFor = (path) => {
-        if (openDiffTab !== null && sessionId !== undefined) {
-          openDiffTab(sessionId, path)
-          return
-        }
+        // The patch opens as its own tab wherever the dock offers one. Inside the
+        // pane that is what keeps a long change list from hiding the patch: the
+        // inline form renders below the entire list, so the click would look like
+        // it did nothing. A `false` answer means the dock has no diff type yet and
+        // the caller keeps its fallback.
+        if (openDiffTab !== null && sessionId !== undefined && openDiffTab(sessionId, path) !== false) return
         if (openSidebar !== null) {
           // The pane may not have been up yet; hand it the path and let its own
           // effect read the patch, so the click is one request either way.
@@ -4031,11 +4061,16 @@
         }
         // A resource tab *beside* the repo panel rather than in place of it, so the
         // change list stays where it was and each file's patch keeps its own tab.
+        // Answers whether the dock took it: a dock without the diff type must leave
+        // the caller its fallback rather than swallow the click.
         const openDiffTab = (session, path) => {
+          if (diffReady !== true || sidebarApi === null) return false
           try {
-            sidebarApi?.openResource(diffAddress(session, path))
+            sidebarApi.openResource(diffAddress(session, path))
+            return true
           } catch {
             // Same as openSidebar: the dock may not have answered yet.
+            return false
           }
         }
         const sidebarExpanded = () => {
@@ -4100,7 +4135,12 @@
                     name: 'sidebar.right.pane.tab',
                     key: SIDEBAR_ID,
                     locale: LOCALE_NAMESPACE,
-                    inject: () => ({ remote: ctx.remote, surface: 'pane' }),
+                    // The same tab opener the composer menu gets. From inside the
+                    // pane a long change list would otherwise push an inline patch
+                    // below the fold, so a click would look like it did nothing.
+                    // The opener answers `false` until the dock has the diff type,
+                    // which is what lets the inline fallback keep working.
+                    inject: () => ({ remote: ctx.remote, surface: 'pane', openDiffTab }),
                   },
                   GithubSyncButton,
                 ),
@@ -4162,7 +4202,13 @@
               scope.slots.inject('sidebar.right.pane.tab.title', () =>
                 scope.slots.register(
                   { name: 'sidebar.right.pane.tab.title', key: DIFF_ID, locale: LOCALE_NAMESPACE },
-                  (props) => React.createElement('span', null, props?.t?.('diff.chip') ?? 'Diff'),
+                  // The registry captured `Diff: <path>` when the tab opened; a
+                  // static label dropped the one thing the chip is for.
+                  (props) => {
+                    const useTabInfo = typeof props?.useTabInfo === 'function' ? props.useTabInfo : () => undefined
+                    const info = useTabInfo()
+                    return React.createElement('span', null, info?.tab?.title ?? props?.t?.('diff.chip') ?? 'Diff')
+                  },
                 ),
               ),
             ),

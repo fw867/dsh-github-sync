@@ -319,7 +319,9 @@ Each file is self-contained:
 | `test/changes-tree.mjs` | The list's shape and the patch's row model, pure: a status code picks one badge and one tone, a chain compresses to `src/a`, directories sort before files and count their subtree, folding hides a subtree without losing its row, a repeated path counts once, a rename keeps its original path, a rewritten line pairs with its replacement (and only then is highlighted), split puts a rewrite on one row while a lone removal keeps one half, and a CRLF patch carries no carriage return into a row |
 | `test/untracked-diff.mjs` | A new file opens a patch against real git: a named untracked path is rendered as all-addition, a tracked modification keeps its ordinary patch, a staged review shows the index only (an untracked path has nothing in it), a whole-tree review stays `HEAD`-only, a binary new file is named, and the route's path guard refuses absolute, climbing and NUL-bearing paths |
 | `test/diff-route.mjs` | Both Host routes' contract: a good request reaches the engine with the session's workspace and the chosen directory, the answer is not cacheable, an untrusted request is refused before git, GET is 405, a missing session/path is 400, an unknown session is 404, a malformed body is 400, an engine failure is reported as a 500 rather than thrown, and the message route forwards only repository-relative paths, whole message included |
-| `test/diff-fast-path.mjs` | A click in the panel — the surface where the diff tab is not available — reads the patch over the Host route (one POST, no command), the patch renders, and a route that answers 404 still falls back to `/github diff --file` |
+| `test/diff-fast-path.mjs` | A click where no diff tab is available (a dock without resource tabs) reads the patch over the Host route (one POST, no command), the patch renders, and a route that answers 404 still falls back to `/github diff --file` |
+| `test/diff-from-pane.mjs` | A file click in the **sidebar pane** opens the `github-diff` resource tab — the same opener the popup uses — instead of painting the patch below a long list; a dock whose opener answers "no" still fetches the patch over the command bridge, and the popup keeps its opener |
+| `test/diff-tab-body.mjs` | A diff tab reads its address from the tab information (`tab.contentId`), not from a prop that never arrives: the patch is fetched and drawn with its path header, the read goes through the address's session rather than the active one, the chip carries the captured `Diff: <path>` title, and a body with no tab information says so instead of crashing |
 | `test/message-suggest.mjs` | `/github message` is wired to the engine and forwards its `--file` paths; against real git, a message comes back for the working tree (tracked changes plus new files, subject and body), a narrowed request answers about the named path, a body's `\n` escapes survive the command line, and the index, the HEAD commit and the working tree are exactly as they were |
 
 They load the shipped `client.js` and read its dictionaries, so a renamed key or a
@@ -366,6 +368,27 @@ DSH's right sidebar — the dock that Files, Terminal, and the browser already l
 in. There the panel is a column: full height, no dismissal, its own **Refresh**, and
 room for a diff or a log to be read rather than scrolled through a letterbox.
 
+Clicking a changed file opens its patch as a `github-diff` **resource tab beside the
+panel**, from the pane exactly as from the popup. That is what keeps a long change
+list from hiding the patch: an inline patch renders below the whole list, so in the
+pane a click that painted there looked like a click that did nothing. The tab leaves
+the list where it was, scrolls the patch in its own column, and keeps one tab per
+file, so two patches are compared by flicking between them. The dock's opener answers
+whether it took the request; a deployment whose dock has no resource tabs falls back
+to the patch in the panel, over the Host route when there is one and the command
+bridge otherwise.
+
+A resource tab's **address is not a prop**. The slot hands every body the
+`useTabInfo` hook, and the address is `tab.contentId` — the value `openResource`
+was called with. The diff body reads it from there and resolves the path from the
+address; the chip renders `tab.title`, the text the registry captured at open time
+(`Diff: src/a.js`), rather than a static label. The address also names the session,
+and the body reads through that session rather than whichever one is in front: a
+kept-mounted tab must keep describing the workspace its patch came from. A chip that
+only said "Diff" made a strip of open patches impossible to tell apart, and a body
+that trusted `props.address` claimed "This tab has no file to compare" for a file
+that had just been clicked.
+
 It is **the same control**, not a second implementation: one component, two
 containers. `surface: 'menu'` renders the button and the popup; `surface: 'pane'`
 renders the panel as a column of the page. The probe, the change list, the message
@@ -383,7 +406,7 @@ The tab is registered the way DSH's own sidebar features register theirs:
 | `sidebarRight`, `sidebarRightTabs` in the module's `inject` | The dock's two services are **declared**, so activation waits for them. Reading `ctx.get` once at activation raced the dock: on some restarts it returned `undefined`, the tab was never registered, and both the menu entry and auto-open disappeared. The composer still registers after the dock, and a late `ctx.inject`/handle keeps the panel reachable if the services are replaced. |
 | `ctx.sidebarRightTabs.register({ id, kind, priority: 'extension', title })` | The tab type. `id` is also the key the body and chip are registered under, and it is deliberately **the same string as `kind`**. The dock dispatches under `definition.id` but falls back to `tab.kind` while a restored tab's definition is not registered yet; two different strings make that fallback miss the body and show the dock's "nothing can view this" message. A `kind` carries at most one `extension` beside the builtin one. |
 | `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id, locale, inject }, Body)` | The pane body. It receives the session's standard props, which is how it knows which workspace to check. |
-| `ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, Chip)` | The tab chip. |
+| `ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: id }, Chip)` | The tab chip. Optional: without an entry the chip shows the title the registry captured when the tab opened. The diff tab registers one that renders that captured title (`Diff: <path>`), so a strip of open patches stays readable; the repo tab shows its localized name. |
 | `ctx.sidebarRight.openTab(kind)` | How the menu gets there — the dock's own controller, and the reason the panel expands when it opens. |
 
 The whole registration is wrapped, and the menu item is offered only **after** the
